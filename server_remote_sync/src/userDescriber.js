@@ -1,0 +1,86 @@
+/**
+ * 用户照片解读模块
+ *
+ * 如果有视觉模型（LAS / 火山引擎视觉），则调用模型生成文字外貌描述
+ * 否则返回基于参考图的描述，让 Seedream 直接从参考图1还原用户外貌
+ */
+
+const axios = require('axios');
+
+const LAS_API_KEY = process.env.LAS_API_KEY;
+const LAS_BASE_URL = process.env.LAS_BASE_URL || 'https://newapi.aisonnet.org/v1';
+
+const VOLCENGINE_API_KEY = process.env.SEEDREAM_NATIVE_API_KEY;
+const VOLCENGINE_BASE_URL = (process.env.SEEDREAM_NATIVE_API_URL || '').replace('/images/generations', '');
+const VISION_MODEL = process.env.VISION_MODEL || 'doubao-1-5-vision-pro-32k-250115';
+
+// LAS 中转平台用于视觉解读的模型（Nano_Banana_Pro 基于 Gemini，支持 vision）
+const LAS_VISION_MODEL = process.env.LAS_VISION_MODEL || 'Nano_Banana_Pro_2K_0';
+
+const DESCRIBE_PROMPT = `Describe this person's physical appearance in ONE concise paragraph for a photo generation prompt. Include: gender, ethnicity, APPROXIMATE AGE (specify age range: young adult/adult/elderly), hair style and color, face shape, facial features (IMPORTANT: describe EYES precisely — eye size relative to face, eye shape round or almond, eye opening wide or narrow, single or double eyelid), nose, mouth, skin tone, build (slim/average/athletic/stocky). IMPORTANT EYEWEAR RULE: If the person is wearing glasses, describe them ("wearing [frame shape] [frame color] glasses"). If the person is NOT wearing glasses, you MUST explicitly state "not wearing glasses" or "with bare eyes" — do NOT add glasses that aren't there. CRITICAL EYE DESCRIPTION: You MUST describe the person's eyes ACCURATELY — if the eyes are large and wide-open in the photo, say "large wide-open eyes"; if they are medium, say "medium-sized eyes"; if they are small, say "small eyes". Do NOT default to "small eyes" — match what you actually see. The person's eyes should be described as open and natural, not squinting. Do NOT include clothing or background. Output only the description text, nothing else. Example: "An Asian male in his 20s with short black hair, round face, large round eyes with double eyelids, flat nose bridge, light skin tone, slim build, not wearing glasses"`;
+
+// 无视觉模型时的描述：让 Seedream 直接从参考图1还原
+const FALLBACK_DESCRIPTION = 'A full-grown adult person (20-30 years old) whose face, hair, skin tone, build, and ALL facial features exactly match reference image 1 — reproduce the identical physical appearance. EYE RULE: Reproduce the EXACT same eye size, eye shape, and eye openness as reference image 1 — do NOT make the eyes smaller or narrower than shown. Eyes should be fully open and natural, not squinting. ONLY add glasses if reference image 1 shows the person wearing glasses.';
+
+/**
+ * 解读用户自拍照片，返回文字外貌描述
+ * @param {string} userImage - Base64 data URL 或 HTTP URL
+ * @returns {Promise<string>} 用户外貌文字描述
+ */
+async function describeUser(userImage) {
+  // 优先使用火山引擎 doubao vision（稳定、快速）
+  if (VOLCENGINE_API_KEY && VOLCENGINE_BASE_URL && VISION_MODEL) {
+    try {
+      console.log('[UserDescriber] 使用火山引擎视觉模型解读照片:', VISION_MODEL);
+      return await callVisionAPI(VOLCENGINE_BASE_URL + '/chat/completions', VOLCENGINE_API_KEY, userImage, VISION_MODEL);
+    } catch (err) {
+      console.warn('[UserDescriber] 火山引擎视觉模型调用失败:', err.message, '，尝试备选');
+    }
+  }
+
+  // 备选：LAS 中转平台
+  if (LAS_API_KEY) {
+    try {
+      console.log('[UserDescriber] 使用 LAS 中转平台解读照片');
+      return await callVisionAPI(LAS_BASE_URL + '/chat/completions', LAS_API_KEY, userImage, LAS_VISION_MODEL);
+    } catch (err) {
+      console.warn('[UserDescriber] LAS 调用失败:', err.message, '，使用参考图描述');
+    }
+  }
+
+  // 无视觉模型，返回基于参考图的描述（Seedream 会参考 image[1] 还原外貌）
+  console.log('[UserDescriber] 无视觉模型，使用参考图描述');
+  return FALLBACK_DESCRIPTION;
+}
+
+async function callVisionAPI(url, apiKey, userImage, model) {
+  const content = [
+    { type: 'text', text: DESCRIBE_PROMPT },
+    { type: 'image_url', image_url: { url: userImage, detail: 'high' } },
+  ];
+
+  const response = await axios.post(
+    url,
+    {
+      model: model || VISION_MODEL,
+      temperature: 0,
+      messages: [{ role: 'user', content }],
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      timeout: 30000,
+    }
+  );
+
+  const description = response.data.choices?.[0]?.message?.content?.trim();
+  if (!description) {
+    throw new Error('用户照片解读失败：模型未返回有效描述');
+  }
+
+  return description;
+}
+
+module.exports = { describeUser };

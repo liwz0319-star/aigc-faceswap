@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Environment variables (含 API 密钥，不上传)
+.env
+server/.env
+
+# Logs
+*.log
+server-start.err
+server-start.log
+
+# Test artifacts
+test_output_*.jpg
+test_tasks*.json
+test_user_b64.txt
+
+# ZIP archives
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Generated images (本地测试输出)
+生成测试/
+
+# 素材文件 (大文件，不上传到 git)
+素材/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Deploy scripts
+.deploy/
+
+# Misc
+image.png

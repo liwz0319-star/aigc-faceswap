@@ -1,0 +1,113 @@
+{
+  "1": {
+    "external_ids": ["101"],
+    "reference_images": [
+      "素材/运动员图片/阿方索·戴维斯1.jpg"
+    ],
+    "name": "Alphonso Davies",
+    "prompt_desc": "Alphonso Davies, very deep dark brown skin, extremely close-cropped nearly shaved black hair, medium full beard, prominent wide cheekbones, broad flat nose bridge, oval face shape, strong neck, recognizable accurate facial features, confident warm smile, highly athletic muscular build",
+    "identity_anchor": "Alphonso Davies, very deep dark brown skin, extremely close-cropped nearly shaved black hair, medium full beard, prominent wide cheekbones, broad flat nose bridge, oval face shape",
+    "expression": "confident warm smile",
+    "body": "highly athletic, powerful muscular build"
+  },
+  "2": {
+    "external_ids": ["102"],
+    "reference_images": [
+      "素材/运动员图片/奥利塞1.jpg"
+    ],
+    "name": "Michael Olise",
+    "prompt_desc": "Michael Olise, medium brown skin tone, short twisted dreadlocks/locs close to the head, thin mustache and sparse goatee, very slim angular face, sharp prominent cheekbones, defined narrow jaw, small earring, slender neck, recognizable accurate facial features, calm cool expression, lean agile build",
+    "identity_anchor": "Michael Olise, medium brown skin tone, short twisted dreadlocks/locs close to the head, thin mustache and sparse goatee, very slim angular face, sharp prominent cheekbones, defined narrow jaw",
+    "expression": "calm cool expression",
+    "body": "lean, agile, slender winger build"
+  },
+  "3": {
+    "external_ids": ["103"],
+    "reference_images": [
+      "素材/运动员图片/基米希1.jpg"
+    ],
+    "name": "Joshua Kimmich",
+    "prompt_desc": "Joshua Kimmich, fair Caucasian skin, short slightly wavy light brown hair, angular defined jaw, slightly wide-set blue-grey eyes, straight nose, clean-shaven or very light stubble, recognizable accurate facial features, friendly confident smile, compact athletic build with strong arms",
+    "identity_anchor": "Joshua Kimmich, fair Caucasian skin, short slightly wavy light brown hair, angular defined jaw, slightly wide-set blue-grey eyes, straight nose, clean-shaven",
+    "expression": "friendly confident smile",
+    "body": "compact athletic build with strong arms"
+  },
+  "4": {
+    "external_ids": ["104"],
+    "reference_images": [
+      "素材/运动员图片/凯恩1.jpg"
+    ],
+    "name": "Harry Kane",
+    "prompt_desc": "Harry Kane, Caucasian, short blonde hair, prominent nose, light beard, recognizable accurate features, calm, professional warm smile, tall, strong, robust striker build",
+    "identity_anchor": "Harry Kane, Caucasian, short blonde hair, prominent nose, light beard, recognizable accurate features",
+    "expression": "calm, professional warm smile",
+    "body": "tall, strong, robust striker build"
+  },
+  "5": {
+    "external_ids": ["105"],
+    "reference_images": [
+      "素材/运动员图片/路易斯·迪亚斯1.jpg"
+    ],
+    "name": "Luis Díaz",
+    "prompt_desc": "Luis Díaz, tan skin, curly hair with frosted blonde tips, goatee and mustache, prominent cheekbones, visible arm tattoos, recognizable accurate features, passionate, warm energetic smile, lean, highly explosive athletic winger build",
+    "identity_anchor": "Luis Díaz, tan skin, curly hair with frosted blonde tips, goatee and mustache, prominent cheekbones, visible arm tattoos, recognizable accurate features",
+    "expression": "passionate, warm energetic smile",
+    "body": "lean, highly explosive athletic winger build"
+  },
+  "6": {
+    "external_ids": ["106"],
+    "reference_images": [
+      "素材/运动员图片/伦纳特·卡尔1.jpg"
+    ],
+    "name": "Lennart Karl",
+    "prompt_desc": "Lennart Karl, Caucasian, youthful face, short brown hair with bangs, light mustache and goatee, recognizable accurate facial features, confident, energetic, slightly open mouth, lean, agile, youthful athletic build",
+    "identity_anchor": "Lennart Karl, Caucasian, youthful face, short brown hair with bangs, light mustache and goatee, recognizable accurate facial features",
+    "expression": "confident, energetic, slightly open mouth",
+    "body": "lean, agile, youthful athletic build"
+  },
+  "7": {
+    "external_ids": ["107"],
+    "reference_images": [
+      "素材/运动员图片/穆夏拉1.jpg"
+    ],
+    "name": "Jamal Musiala",
+    "prompt_desc": "Jamal Musiala, light brown skin, short dark curly hair, youthful appearance, recognizable accurate facial features, focused, determined, calm, slender, highly agile, lean attacking midfielder build",
+    "identity_anchor": "Jamal Musiala, light brown skin, short dark curly hair, youthful appearance, recognizable accurate facial features",
+    "expression": "focused, determined, calm",
+    "body": "slender, highly agile, lean attacking midfielder build"
+  },
+  "8": {
+    "external_ids": ["108"],
+    "reference_images": [
+      "素材/运动员图片/诺伊尔1.jpg",
+      "素材/运动员图片/诺伊尔2.jpg"
+    ],
+    "name": "Manuel Neuer",
+    "prompt_desc": "Manuel Neuer, Caucasian, blue eyes, short light brown hair, slight stubble, mature and commanding appearance, recognizable accurate features, calm, experienced, serious expression, very tall, broad shoulders, powerful athletic build",
+    "identity_anchor": "Manuel Neuer, Caucasian, blue eyes, short light brown hair, slight stubble, mature and commanding appearance, recognizable accurate features",
+    "expression": "calm, experienced, serious expression",
+    "body": "very tall, broad shoulders, powerful athletic build"
+  },
+  "9": {
+    "external_ids": ["109"],
+    "reference_images": [
+      "素材/运动员图片/亚历山大·帕夫洛维奇1.jpg"
+    ],
+    "name": "Aleksandar Pavlović",
+    "prompt_desc": "Aleksandar Pavlović, Caucasian, dark wavy/curly hair, thick prominent eyebrows, light mustache and goatee, recognizable accurate features, intense, focused, determined, tall, lean athletic build",
+    "identity_anchor": "Aleksandar Pavlović, Caucasian, dark wavy/curly hair, thick prominent eyebrows, light mustache and goatee, recognizable accurate features",
+    "expression": "intense, focused, determined",
+    "body": "tall, lean athletic build"
+  },
+  "10": {
+    "external_ids": ["110"],
+    "reference_images": [
+      "素材/运动员图片/于帕梅卡诺1.jpg"
+    ],
+    "name": "Dayot Upamecano",
+    "prompt_desc": "Dayot Upamecano, dark skin, buzz cut, full dark beard, prominent cheekbones, recognizable accurate features, expressive, joyful smile, highly muscular, very strong, robust defender build",
+    "identity_anchor": "Dayot Upamecano, dark skin, buzz cut, full dark beard, prominent cheekbones, recognizable accurate features",
+    "expression": "expressive, ranging from intense focus to wide joyful smile",
+    "body": "highly muscular, very strong, robust defender build"
+  }
+}
