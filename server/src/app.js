@@ -44,9 +44,20 @@ app.use((req, res, next) => {
 });
 
 // JSON 解析（限制10MB，防止 Base64 炸弹）
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
+
+// 请求日志（调试用）
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    const body = req.body || {};
+    console.log(`[REQ] ${req.method} ${req.path} ip=${req.ip} | star_ids=${JSON.stringify(body.star_ids)} scene_id=${body.scene_id} has_user_image=${!!(body.user_image)} has_user_images=${!!(body.user_images)} user_images_len=${Array.isArray(body.user_images) ? body.user_images.length : 0} gender=${body.gender}`);
+  }
+  next();
+});
 
 // ─── 路由 ───
+app.use('/static', require('express').static('/www/wwwroot/bayern-fan-photo'));
+app.use('/public', require('express').static('/www/wwwroot/bayern-fan-photo/server/public'));
 app.use('/api/v1/synthesis', synthesisRouter);
 
 // 健康检查

@@ -2,7 +2,10 @@
  * Faceswap 本地直测脚本（无需 Redis / 队列）
  * - 视觉模型解读用户照片外貌
  * - 每张模板指定精确替换位置
- * - Seedream 4.5 native 模式生成
+ *
+ * 用法：
+ *   node test-faceswap-local.js              # 默认 native 模式（Seedream 4.5）
+ *   node test-faceswap-local.js --relay      # relay 中转模式（Seedream 4.6）
  */
 
 const fs   = require('fs');
@@ -24,7 +27,11 @@ if (!process.env.VISION_API_KEY && process.env.SEEDREAM_NATIVE_API_KEY) {
 // 将 server/node_modules 加入模块解析路径
 require('module').Module.globalPaths.push(path.join(SERVER_DIR, 'node_modules'));
 
+// 判断模式：--relay / --native
+const MODE = process.argv.includes('--relay') ? 'relay' : 'native';
+
 const { generateNativeImage }    = require('./server/src/seedreamNativeClient');
+const { generateImage }          = require('./server/src/seedreamClient');
 const { buildFaceswapPrompt }    = require('./server/src/promptBuilder_faceswap');
 const { describeUserAppearance } = require('./server/src/visionClient');
 
@@ -119,9 +126,41 @@ function downloadFile(url, dest) {
   });
 }
 
+/**
+ * native 模式：Seedream 4.5 直连火山方舟
+ */
+async function generateNative(prompt, negative_prompt, templateBase64, userBase64, _compactPrompt) {
+  return generateNativeImage({
+    prompt,
+    negative_prompt,
+    images: [templateBase64, userBase64],  // Image 1=模板, Image 2=球迷
+    size: '2048x2048',
+    scene_params: { strength: 0.35, guidance_scale: 10 },
+  });
+}
+
+/**
+ * relay 模式：Seedream 4.6 中转（OpenAI chat/completions）
+ * 用精简 prompt 避免超 4000 token 限制
+ */
+async function generateRelay(prompt, negative_prompt, templateBase64, userBase64, compactPrompt) {
+  return generateImage({
+    prompt: compactPrompt,          // 用精简版 prompt
+    negative_prompt: '',            // relay 模式不传 negative_prompt 省 token
+    scene_image: templateBase64,    // Image 1=模板
+    extra_images: [userBase64],     // Image 2=球迷
+    size: '2048x2048',
+  });
+}
+
 async function main() {
+  const isRelay = MODE === 'relay';
+  const modelLabel = isRelay
+    ? `Seedream 4.6 relay (${process.env.SEEDREAM_MODEL || 'seedream-4.6'})`
+    : 'Seedream 4.5 native';
+
   console.log('========================================');
-  console.log('Faceswap 测试（Seedream 4.5 native）');
+  console.log(`Faceswap 测试 — ${modelLabel}`);
   console.log('========================================');
 
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -138,7 +177,8 @@ async function main() {
   }
 
   // ── Step 2: 逐模板生成 ──
-  console.log(`\n[Step 2] 开始处理 ${TEMPLATES.length} 张模板...\n`);
+  const generate = isRelay ? generateRelay : generateNative;
+  console.log(`\n[Step 2] 开始处理 ${TEMPLATES.length} 张模板 (${MODE} 模式)...\n`);
 
   const results = [];
 
@@ -152,29 +192,23 @@ async function main() {
 
     const templateBase64 = toBase64DataUrl(templatePath);
 
-    const { prompt, negative_prompt } = buildFaceswapPrompt({
+    const { prompt, negative_prompt, compactPrompt } = buildFaceswapPrompt({
       targetPerson:    tpl.targetPerson,
       userDescription: userDescription,
     });
 
-    console.log(`Prompt: ${prompt.split('\n').length} 行 | 参考图: 1模板 + ${userBase64s.length}球迷`);
-    console.log(`调用 generateNativeImage...`);
+    console.log(`调用 ${MODE} 生成...`);
 
     const t0 = Date.now();
     try {
-      const result = await generateNativeImage({
-        prompt,
-        negative_prompt,
-        images: [templateBase64, userBase64s[0]],  // Image 1=模板底图, Image 2=球迷人脸参考
-        size: '2048x2048',
-        scene_params: { strength: 0.35, guidance_scale: 10 },
-      });
+      const result = await generate(prompt, negative_prompt, templateBase64, userBase64s[0], compactPrompt);
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       console.log(`生成成功 (${elapsed}s): ${result.url.substring(0, 80)}...`);
 
       // 下载到本地
-      const localFile = path.join(OUTPUT_DIR, `${baseName}_faceswap.jpg`);
+      const suffix = isRelay ? '_faceswap_relay' : '_faceswap_native';
+      const localFile = path.join(OUTPUT_DIR, `${baseName}${suffix}.jpg`);
       await downloadFile(result.url, localFile);
       console.log(`已保存: ${path.basename(localFile)}`);
 
@@ -188,17 +222,17 @@ async function main() {
 
   // ── 汇总 ──
   console.log('\n========================================');
-  console.log('汇总结果');
+  console.log(`汇总结果 (${MODE})`);
   console.log('========================================');
   results.forEach((r, i) => {
-    const tag = r.status === 'ok' ? '✓' : '✗';
+    const tag = r.status === 'ok' ? 'OK' : 'FAIL';
     console.log(`[${i + 1}] ${tag} ${r.file}  替换:${r.targetDesc}  (${r.elapsed}s)`);
     if (r.status === 'ok')     console.log(`      保存: ${path.basename(r.localFile)}`);
     if (r.status === 'failed') console.log(`      错误: ${r.error}`);
   });
 
-  const jsonFile = path.join(OUTPUT_DIR, `result_${Date.now()}.json`);
-  fs.writeFileSync(jsonFile, JSON.stringify({ userDescription, results }, null, 2), 'utf8');
+  const jsonFile = path.join(OUTPUT_DIR, `result_${MODE}_${Date.now()}.json`);
+  fs.writeFileSync(jsonFile, JSON.stringify({ mode: MODE, model: modelLabel, userDescription, results }, null, 2), 'utf8');
   console.log(`\n结果已保存: ${jsonFile}`);
 }
 

@@ -1,5 +1,5 @@
 /**
- * Faceswap 场景2 测试脚本（inpainting mask 精准换脸）
+ * Faceswap 场景3 测试脚本（inpainting mask 精准换脸）
  *
  * 流程：
  *   1. 视觉模型检测用户性别 → 选底图
@@ -7,12 +7,12 @@
  *   3. 调用 Seedream 4.5 inpainting（mask区域换脸，其余像素完全保留）
  *   4. 下载保存结果
  *
- * Mask 坐标（已通过视觉核验确认）：
- *   男性底图 scene_02_user2_*: cx=670, cy=380, rx=90, ry=130
- *   女性底图 scene_02_*:       cx=700, cy=530, rx=90, ry=130
+ * Mask 坐标（视觉模型核验，底图均为 1122×1402）：
+ *   男性底图 scene_03_user2_*: cx=389, cy=357, rx=60, ry=91
+ *   女性底图 scene_03_*:       cx=490, cy=500, rx=49, ry=88
  *
  * 用法：
- *   node test-faceswap-scene2.js [用户照片路径] [--gender male|female]
+ *   node test-faceswap-scene3-inpaint.js [用户照片路径] [--gender male|female]
  */
 
 const fs   = require('fs');
@@ -36,27 +36,25 @@ const axios = require(path.join(SERVER_DIR, 'node_modules', 'axios'));
 // 配置
 // ============================================================
 const RELAY_DIR  = path.join(__dirname, '生成测试', 'relay_test');
-const OUTPUT_DIR = path.join(__dirname, '生成测试', '场景2测试2');
+const OUTPUT_DIR = path.join(__dirname, '生成测试', 'faceswap_output');
 const DEFAULT_USER_PHOTO = 'f:/AAA Work/AIproject/demo/球星球迷合照/生成测试/照片/efd3b40c22f3aefc65349fdd4a768d59.jpg';
 
-// 底图尺寸从文件动态读取（用户可能对底图做了修改）
-
 /**
- * 场景2 模板配置（使用 scene2-M.jpg / scene2-F.png 新底图）
- * mask: 目标球迷脸部椭圆 mask（通过视觉 API 精准定位，2025-04-27 核验）
- *   cx/cy = 椭圆中心像素坐标（基于 1126×1397 底图）
+ * 场景3 模板配置
+ * mask: 目标球迷脸部椭圆 mask（视觉模型核验，输入图像素坐标）
+ *   cx/cy = 椭圆中心像素坐标（基于底图原始尺寸）
  *   rx/ry = 横轴/纵轴半径
  */
-const SCENE2_TEMPLATES = {
+const SCENE3_TEMPLATES = {
   male: {
-    file:        'scene2-M.jpg',
-    description: '男球迷底图',
-    mask:        { cx: 643, cy: 467, rx: 84, ry: 112 },
+    file:        'scene3-M.jpg',
+    description: '男球迷底图（左数第2位）',
+    mask:        { cx: 389, cy: 374, rx: 90, ry: 130 },
   },
   female: {
-    file:        'scene2-F.png',
-    description: '女球迷底图',
-    mask:        { cx: 617, cy: 485, rx: 88, ry: 146 },
+    file:        'scene3-F.jpg',
+    description: '女球迷底图（左数第3位，中间）',
+    mask:        { cx: 495, cy: 481, rx: 80, ry: 110 },
   },
 };
 
@@ -131,13 +129,10 @@ async function detectGender(userImageBase64) {
 
 /**
  * 生成椭圆 inpainting mask（白色=换脸区域，黑色=保留区域）
- *
- * maskCoords: 坐标基于 inputW × inputH 像素空间
- * outputW/outputH: API 实际输出尺寸（mask 需按比例缩放到输出尺寸，
- *                  因为 Seedream API 以输出坐标系解析 mask_image）
+ * maskCoords 坐标基于 inputW × inputH 像素空间
+ * mask 输出尺寸按比例缩放到 outputW × outputH
  */
 async function buildMask(inputW, inputH, { cx, cy, rx, ry }, outputW, outputH) {
-  // 如果没有传入 outputW/outputH，fallback 为 input 尺寸（向后兼容）
   const mW = outputW || inputW;
   const mH = outputH || inputH;
   const scaleX = mW / inputW;
@@ -146,10 +141,11 @@ async function buildMask(inputW, inputH, { cx, cy, rx, ry }, outputW, outputH) {
   const mcy = Math.round(cy * scaleY);
   const mrx = Math.round(rx * scaleX);
   const mry = Math.round(ry * scaleY);
-  const svg = `<svg width="${mW}" height="${mH}"><ellipse cx="${mcx}" cy="${mcy}" rx="${mrx}" ry="${mry}" fill="white"/></svg>`;
+  // 黑色椭圆=换脸区域，白色背景=保留区域（Seedream inpainting 约定：黑=替换）
+  const svg = `<svg width="${mW}" height="${mH}"><ellipse cx="${mcx}" cy="${mcy}" rx="${mrx}" ry="${mry}" fill="black"/></svg>`;
   console.log(`         mask 输出坐标: cx=${mcx} cy=${mcy} rx=${mrx} ry=${mry} (${mW}×${mH})`);
   return sharp({
-    create: { width: mW, height: mH, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    create: { width: mW, height: mH, channels: 3, background: { r: 255, g: 255, b: 255 } },
   })
     .composite([{ input: Buffer.from(svg), blend: 'over' }])
     .png()
@@ -167,7 +163,7 @@ async function main() {
   const MODEL   = process.env.SEEDREAM_NATIVE_MODEL || 'doubao-seedream-4-5-251128';
 
   console.log('========================================');
-  console.log('Faceswap 场景2（Inpainting 精准换脸）');
+  console.log('Faceswap 场景3（Inpainting 精准换脸）');
   console.log('========================================');
   console.log(`用户照片: ${path.basename(cli.userPhotoPath)}`);
   console.log(`模型: ${MODEL}`);
@@ -192,22 +188,32 @@ async function main() {
   console.log(`[性别检测] 结果: ${genderLabel}`);
 
   // Step 3: 选择底图
-  const tpl          = SCENE2_TEMPLATES[gender];
+  const tpl          = SCENE3_TEMPLATES[gender];
   const templatePath = path.join(RELAY_DIR, tpl.file);
-  console.log(`\n[Step 3] 底图: ${tpl.file}`);
+  console.log(`\n[Step 3] 底图: ${tpl.file}  (${tpl.description})`);
   if (!fs.existsSync(templatePath)) {
     console.error(`底图不存在: ${templatePath}`);
     process.exit(1);
   }
 
-  // Step 4: 生成 mask（动态读取底图尺寸）
+  // Step 3.5: 视觉模型解读外貌
+  console.log('\n[Step 3.5] 视觉模型解读外貌...');
+  let userDescription = '';
+  try {
+    const { describeUserAppearance } = require('./server/src/visionClient');
+    userDescription = await describeUserAppearance([userBase64]);
+    console.log(`外貌描述: ${userDescription.substring(0, 120)}...`);
+  } catch (err) {
+    console.warn(`视觉模型失败，跳过: ${err.message}`);
+  }
+
+  // Step 4: 生成 mask
   console.log('\n[Step 4] 生成 inpainting mask...');
   const imgMeta = await sharp(templatePath).metadata();
   const IMG_W = imgMeta.width;
   const IMG_H = imgMeta.height;
   const { cx, cy, rx, ry } = tpl.mask;
-  console.log(`         椭圆: cx=${cx} cy=${cy} rx=${rx} ry=${ry} (图片尺寸 ${IMG_W}×${IMG_H})`);
-  // 解析输出尺寸（如 "2048x2560" → [2048, 2560]）
+  console.log(`         椭圆: cx=${cx} cy=${cy} rx=${rx} ry=${ry} (底图 ${IMG_W}×${IMG_H})`);
   const [outW, outH] = cli.size.split('x').map(Number);
   const maskBuf = await buildMask(IMG_W, IMG_H, tpl.mask, outW, outH);
   const maskBase64 = 'data:image/png;base64,' + maskBuf.toString('base64');
@@ -216,16 +222,23 @@ async function main() {
   console.log('\n[Step 5] 调用 Seedream 4.5 inpainting...');
   console.log(`         size: ${cli.size}  guidance: ${cli.guidanceScale}`);
 
+  const appearanceLine = userDescription
+    ? `Appearance cues from Image 2: ${userDescription}`
+    : '';
+
   const prompt = [
     'Photorealistic photo. Identity-preserving face-swap edit.',
     'Image 1 is the source photo — reproduce it with maximum fidelity.',
-    'Image 2 is the identity reference — replace ONLY the face in the white mask region with the face from Image 2.',
-    'Critical: The person in the result must be clearly identifiable as Image 2.',
+    'Image 2 is the identity reference — replace ONLY the face in the black mask region with the face from Image 2.',
+    'Critical: The person in the result must be clearly identifiable as the same person as Image 2.',
+    appearanceLine,
+    'Preserve face shape, eyes, nose, lips, skin tone, hairstyle, hair length, and hair color from Image 2.',
+    'Do NOT carry over the original face from Image 1 — the identity must come entirely from Image 2.',
     'Keep body, pose, clothing, and background from Image 1 exactly unchanged outside the mask.',
     '8K quality, sharp face, photorealistic.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
-  const negative_prompt = 'blurry face, distorted face, cartoon, changed background, changed clothing, identity drift';
+  const negative_prompt = 'blurry face, distorted face, cartoon, changed background, changed clothing, changed pose, identity drift, wrong hairstyle';
 
   const t0 = Date.now();
   let resultUrl;
@@ -256,7 +269,7 @@ async function main() {
   console.log('\n[Step 6] 下载结果...');
   const ts        = Date.now();
   const genderTag = gender === 'female' ? 'F' : 'M';
-  const finalFile = path.join(OUTPUT_DIR, `scene2_inpaint_${genderTag}_${ts}.jpg`);
+  const finalFile = path.join(OUTPUT_DIR, `scene3_inpaint_${genderTag}_${ts}.jpg`);
   await downloadFile(resultUrl, finalFile);
   console.log(`         已保存: ${path.basename(finalFile)}`);
 

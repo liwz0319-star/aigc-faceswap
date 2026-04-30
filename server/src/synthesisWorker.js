@@ -7,6 +7,9 @@
  */
 
 const axios = require('axios');
+const path  = require('path');
+const fs    = require('fs');
+const fsp   = require('fs').promises;
 
 // 模式选择：relay / native / minimal（最简测试）/ seedream（seedream调试）
 const SEEDREAM_MODE = (process.env.SEEDREAM_MODE || 'relay').toLowerCase();
@@ -22,6 +25,7 @@ const { generateNativeImage } = require('./seedreamNativeClient');
 const { getTask, updateTask, STATUS } = require('./taskQueue');
 const { loadReferenceImage, loadJerseyReferences, loadBeerMugReference, loadCompositionReference, loadBackgroundReference, getPlayerReferenceImages } = require('./assetStore');
 const { describeUserAppearance } = require('./visionClient');
+const { describeUser }           = require('./userDescriber');
 // Seedream 调用重试配置
 const SEEDREAM_MAX_RETRIES = 2;
 const SEEDREAM_RETRY_DELAYS = [3000, 6000];
@@ -32,6 +36,54 @@ const CALLBACK_RETRY_DELAYS = [2000, 5000, 10000];
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// 结果图片本地化：下载到 public/results/ 并返回干净 URL
+const RESULTS_DIR = '/www/wwwroot/bayern-fan-photo/server/public/results';
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'http://111.229.177.65:3001').replace(/\/+$/, '');
+
+async function localizeResultImage(remoteUrl, taskId) {
+  try {
+    await fsp.mkdir(RESULTS_DIR, { recursive: true });
+    const ext = '.jpg';
+    const fileName = `${taskId}${ext}`;
+    const localPath = path.join(RESULTS_DIR, fileName);
+
+    const response = await axios.get(remoteUrl, { responseType: 'arraybuffer', timeout: 30000 });
+    await fsp.writeFile(localPath, response.data);
+
+    const localUrl = `${PUBLIC_BASE_URL}/public/results/${fileName}`;
+    console.log(`[Worker] 图片已本地化: ${localUrl} (${(response.data.length / 1024).toFixed(0)}KB)`);
+    return localUrl;
+  } catch (err) {
+    console.warn(`[Worker] 图片本地化失败，使用原始URL: ${err.message}`);
+    return remoteUrl;
+  }
+}
+
+/**
+ * 从视觉模型的外貌描述中提取性别
+ * @param {string} description - 视觉模型返回的英文描述
+ * @returns {'male'|'female'} 检测到的性别
+ */
+function extractGenderFromDescription(description) {
+  if (!description) return 'male';
+  const lower = description.toLowerCase();
+  // 优先匹配明确的性别词
+  const femaleScore = (lower.match(/\bfemale\b/g) || []).length * 3
+    + (lower.match(/\bwoman\b/g) || []).length * 2
+    + (lower.match(/\bgirl\b/g) || []).length * 2
+    + (lower.match(/\bher\b/g) || []).length
+    + (lower.match(/\bshe\b/g) || []).length;
+  const maleScore = (lower.match(/\bmale\b/g) || []).length * 3
+    + (lower.match(/\bman\b|\bman['']s\b/g) || []).length * 2
+    + (lower.match(/\bboy\b/g) || []).length * 2
+    + (lower.match(/\bhis\b/g) || []).length
+    + (lower.match(/\bhe\b/g) || []).length;
+  // female 单词里包含 male，所以 female 权重更高才准确
+  if (femaleScore > maleScore) return 'female';
+  if (maleScore > 0) return 'male';
+  return 'male'; // 默认男性
 }
 
 /**
@@ -121,23 +173,24 @@ async function callbackH5WithRetry(url, payload) {
 async function processFaceswapTask(taskId, task) {
   const t0 = Date.now();
     const {
-      template_image,
+      template_image: defaultTemplateImage,
       user_images,
       callback_url,
       size,
-      target_person,
-      gender,
+      target_person: defaultTargetPerson,
+      gender: defaultGender,
+      faceswap_templates,
       faceswap_strength,
       faceswap_guidance_scale,
     } = task.params;
 
   console.log(`[Worker] [faceswap] 开始处理换脸任务: ${taskId}`);
-  console.log(`[Worker] [faceswap] 模板图: ${template_image}`);
   console.log(`[Worker] [faceswap] 球迷照: ${user_images[0]}`);
 
   await updateTask(taskId, { status: STATUS.PROCESSING });
 
   try {
+    // ── 步骤1: 视觉模型解析用户外貌（含性别检测）──
     let userDescription = '';
     try {
       userDescription = await describeUserAppearance([user_images[0]]);
@@ -146,38 +199,131 @@ async function processFaceswapTask(taskId, task) {
       console.warn(`[Worker] [faceswap] 用户外貌解析失败，继续使用强身份 prompt: ${visionErr.message}`);
     }
 
+    // ── 步骤2: 自动性别识别 → 选择男/女模板 ──
+    const detectedGender = userDescription ? extractGenderFromDescription(userDescription) : (defaultGender || 'male');
+    let template_image = defaultTemplateImage;
+    let target_person = defaultTargetPerson;
+    let template_type = 'faceswap'; // 默认真实换脸
+
+    if (faceswap_templates && faceswap_templates[detectedGender]) {
+      const genderConfig = faceswap_templates[detectedGender];
+      template_image    = genderConfig.template_image;
+      target_person     = genderConfig.target_person;
+      template_type     = genderConfig.template_type || 'faceswap';
+      console.log(`[Worker] [faceswap] 性别检测: ${detectedGender} → 使用${detectedGender === 'female' ? '女' : '男'}性模板 (type=${template_type})`);
+    } else {
+      console.log(`[Worker] [faceswap] 性别检测: ${detectedGender} (无分性别模板，使用默认)`);
+    }
+    console.log(`[Worker] [faceswap] 模板图: ${template_image}`);
+
+    // 优先使用模板级别的 size/strength/guidance，其次使用任务参数，最后取默认值
+    const resolvedSize     = faceswap_templates?.[detectedGender]?.size          || size             || '2048x2560';
+    const resolvedStrength = faceswap_templates?.[detectedGender]?.strength      ?? faceswap_strength ?? 0.68;
+    const resolvedGuidance = faceswap_templates?.[detectedGender]?.guidance_scale ?? faceswap_guidance_scale ?? 10;
+
     const { prompt, negative_prompt } = buildFaceswapPrompt({
-      targetPerson: target_person || 'the second person from the left',
+      targetPerson:  target_person || 'the only person in the image',
       userDescription,
-      gender: gender || 'unknown',
+      gender:        detectedGender,
+      templateType:  template_type,
     });
-    console.log(`[Worker] [faceswap] Prompt: ${prompt.length} 字符`);
+    console.log(`[Worker] [faceswap] Prompt: ${prompt.length} 字符 (gender=${detectedGender}, type=${template_type})`);
 
     const imageResult = await generateNativeImage({
       prompt,
       negative_prompt,
       images: [template_image, user_images[0]],  // Image 1=模板底图, Image 2=球迷人脸参考
-      size: size || '2048x2560',
+      size: resolvedSize,
       scene_params: {
-        strength: faceswap_strength ?? 0.68,
-        guidance_scale: faceswap_guidance_scale ?? 10,
+        strength:        resolvedStrength,
+        guidance_scale:  resolvedGuidance,
       },
     });
 
     console.log(`[Worker] [faceswap] 生成成功 (${Date.now() - t0}ms): ${imageResult.url.substring(0, 80)}...`);
 
+    // ── RegionSync 可选后处理 ──────────────────────────────────────────────
+    // 默认不激活。当 task.params.enable_region_sync=true 且 region_sync_key 存在时触发。
+    // 触发后：以模板图为底图画布，只把 editRegions 区域从生成图贴回，其余区域 100% 来自模板。
+    let finalUrl = imageResult.url;
+    if (task.params.enable_region_sync && task.params.region_sync_key) {
+      try {
+        const os   = require('os');
+        const fsp  = require('fs').promises;
+        const http = require('http');
+        const https = require('https');
+        const { composeEditRegionsOverBase } = require('./regionComposer');
+        const faceswapRegions = require('./data/faceswapRegions.json');
+        const regionCfg = faceswapRegions[task.params.region_sync_key];
+
+        if (regionCfg) {
+          console.log(`[Worker] [faceswap] RegionSync 启动 key="${task.params.region_sync_key}"...`);
+
+          // 下载模板图和生成图到临时文件
+          const tmpDir = os.tmpdir();
+          const tmpTemplate  = path.join(tmpDir, `rs_tpl_${taskId}.jpg`);
+          const tmpGenerated = path.join(tmpDir, `rs_gen_${taskId}.jpg`);
+          const tmpFinal     = path.join(tmpDir, `rs_final_${taskId}.jpg`);
+
+          const downloadTmp = (url, dest) => new Promise((res, rej) => {
+            const client = url.startsWith('https') ? https : http;
+            const file   = require('fs').createWriteStream(dest);
+            client.get(url, r => {
+              if (r.statusCode === 301 || r.statusCode === 302) {
+                file.close(); require('fs').unlinkSync(dest);
+                return downloadTmp(r.headers.location, dest).then(res).catch(rej);
+              }
+              r.pipe(file);
+              file.on('finish', () => { file.close(); res(); });
+            }).on('error', rej);
+          });
+
+          await downloadTmp(template_image,  tmpTemplate);
+          await downloadTmp(imageResult.url, tmpGenerated);
+
+          await composeEditRegionsOverBase({
+            sourceImage: tmpTemplate,
+            targetImage: tmpGenerated,
+            outputImage: tmpFinal,
+            regions:     regionCfg.editRegions,
+          });
+
+          // 将合成结果路径记录在结果中（生产环境可替换为 OSS 上传逻辑）
+          finalUrl = `file://${tmpFinal}`;
+          console.log(`[Worker] [faceswap] RegionSync 完成 → ${tmpFinal}`);
+
+          // 清理临时文件（模板和生成图，保留 final）
+          await fsp.unlink(tmpTemplate).catch(() => {});
+          await fsp.unlink(tmpGenerated).catch(() => {});
+        } else {
+          console.warn(`[Worker] [faceswap] RegionSync 配置未找到: "${task.params.region_sync_key}"，跳过`);
+        }
+      } catch (rsErr) {
+        // RegionSync 失败时降级使用原始生成图，不中断任务
+        console.warn(`[Worker] [faceswap] RegionSync 失败，降级使用原始生成图: ${rsErr.message}`);
+        finalUrl = imageResult.url;
+      }
+    }
+    // ── RegionSync 结束 ──────────────────────────────────────────────────
+
+    // ── 图片本地化：下载到我们服务器，给 H5 返回干净 URL ──
+    const callbackUrl_image = await localizeResultImage(finalUrl, taskId);
+
     await updateTask(taskId, {
       status: STATUS.COMPLETED,
       results: [{
-        url: imageResult.url,
+        image_url: callbackUrl_image,
+        url: callbackUrl_image,
+        url_original: imageResult.url,
         urls: imageResult.urls,
         user_description: userDescription,
+        region_sync: task.params.enable_region_sync === true,
       }],
     });
 
     await callbackH5WithRetry(callback_url, {
       task_id: taskId,
-      user_image: imageResult.url,
+      user_image: callbackUrl_image,
     });
 
     console.log(`[Worker] [faceswap] 任务完成: ${taskId} (总耗时 ${Date.now() - t0}ms)`);
@@ -235,9 +381,17 @@ async function processTask(taskId) {
         : [user_image];
       const userImageCountNative = resolvedUserImagesNative.length;
 
-      // 1. 用户外貌描述（固定描述，Seedream 直接参考用户照片还原）
-      const userDescription = 'An adult person whose face, hair, skin tone, build, and ALL facial features exactly match reference image 1. EYE RULE: Reproduce the EXACT same eye size, eye shape, and eye openness as reference image 1 — do NOT make the eyes smaller or narrower. Eyes should be fully open and natural. ONLY add glasses if reference image 1 shows the person wearing glasses.';
-      console.log(`[Worker] 使用固定用户描述`);
+      // 1. 用户外貌描述（调用视觉模型，失败时回退到固定描述）
+      const t1 = Date.now();
+      console.log(`[Worker] 步骤1: 解读用户照片...`);
+      let userDescription;
+      try {
+        userDescription = await describeUser(resolvedUserImagesNative[0]);
+        console.log(`[Worker] 用户描述: ${userDescription.substring(0, 100)}... (${Date.now() - t1}ms)`);
+      } catch (visionErr) {
+        console.warn(`[Worker] 用户照片解读失败，使用固定描述: ${visionErr.message}`);
+        userDescription = 'An adult person whose face, hair, skin tone, build, and ALL facial features exactly match reference image 1. EYE RULE: Reproduce the EXACT same eye size, eye shape, and eye openness as reference image 1 — do NOT make the eyes smaller or narrower. Eyes should be fully open and natural. ONLY add glasses if reference image 1 shows the person wearing glasses.';
+      }
 
       // 2. 先确定球星参考图分组及索引，再拼装 Prompt
       const t2 = Date.now();
@@ -362,12 +516,13 @@ async function processTask(taskId) {
 
       console.log(`[Worker] 生成成功 (${Date.now() - t4}ms): ${imageResult.url.substring(0, 80)}...`);
 
-      // 5. 更新任务结果
+      // 5. 图片本地化 + 更新任务结果
+      const localizedUrl = await localizeResultImage(imageResult.url, taskId);
       await updateTask(taskId, {
         status: STATUS.COMPLETED,
         results: [{
           player_names,
-          image_url: imageResult.url,
+          image_url: localizedUrl,
           urls: imageResult.urls,
           user_description: userDescription,
         }],
@@ -376,7 +531,7 @@ async function processTask(taskId) {
       // 6. 回调 H5
       await callbackH5WithRetry(callback_url, {
         task_id: taskId,
-        user_image: imageResult.url,
+        user_image: localizedUrl,
       });
 
       console.log(`[Worker] 任务完成: ${taskId} (总耗时 ${Date.now() - t0}ms)`);

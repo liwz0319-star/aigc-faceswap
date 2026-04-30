@@ -12,15 +12,15 @@ const LAS_BASE_URL = process.env.LAS_BASE_URL || 'https://newapi.aisonnet.org/v1
 
 const VOLCENGINE_API_KEY = process.env.SEEDREAM_NATIVE_API_KEY;
 const VOLCENGINE_BASE_URL = (process.env.SEEDREAM_NATIVE_API_URL || '').replace('/images/generations', '');
-const VISION_MODEL = process.env.VISION_MODEL || 'doubao-1-5-vision-pro-32k-250115';
+const VISION_MODEL = process.env.VISION_MODEL || '';
 
 // LAS 中转平台用于视觉解读的模型（Nano_Banana_Pro 基于 Gemini，支持 vision）
 const LAS_VISION_MODEL = process.env.LAS_VISION_MODEL || 'Nano_Banana_Pro_2K_0';
 
-const DESCRIBE_PROMPT = `Describe this person's physical appearance in ONE concise paragraph for a photo generation prompt. Include: gender, ethnicity, APPROXIMATE AGE (specify age range: young adult/adult/elderly), hair style and color, face shape, facial features (IMPORTANT: describe EYES precisely — eye size relative to face, eye shape round or almond, eye opening wide or narrow, single or double eyelid), nose, mouth, skin tone, build (slim/average/athletic/stocky). IMPORTANT EYEWEAR RULE: If the person is wearing glasses, describe them ("wearing [frame shape] [frame color] glasses"). If the person is NOT wearing glasses, you MUST explicitly state "not wearing glasses" or "with bare eyes" — do NOT add glasses that aren't there. CRITICAL EYE DESCRIPTION: You MUST describe the person's eyes ACCURATELY — if the eyes are large and wide-open in the photo, say "large wide-open eyes"; if they are medium, say "medium-sized eyes"; if they are small, say "small eyes". Do NOT default to "small eyes" — match what you actually see. The person's eyes should be described as open and natural, not squinting. Do NOT include clothing or background. Output only the description text, nothing else. Example: "An Asian male in his 20s with short black hair, round face, large round eyes with double eyelids, flat nose bridge, light skin tone, slim build, not wearing glasses"`;
+const DESCRIBE_PROMPT = `Describe this person's physical appearance in ONE concise paragraph for a photo generation prompt. Include: gender, ethnicity, APPROXIMATE AGE (specify age range: child/teenager/young adult/adult/elderly), hair style and color, face shape, facial features (eyes, nose, mouth), skin tone, build (slim/average/athletic/stocky), and CRITICALLY any glasses/sunglasses (if wearing glasses, you MUST specify: "wearing [frame shape] [frame color] glasses" — this is MANDATORY, do not omit). Do NOT include clothing or background. Output only the description text, nothing else. Example format: "An Asian male in his 20s with short black hair, round face, small eyes, flat nose bridge, light skin tone, slim build, wearing black rectangular glasses"`;
 
 // 无视觉模型时的描述：让 Seedream 直接从参考图1还原
-const FALLBACK_DESCRIPTION = 'A full-grown adult person (20-30 years old) whose face, hair, skin tone, build, and ALL facial features exactly match reference image 1 — reproduce the identical physical appearance. EYE RULE: Reproduce the EXACT same eye size, eye shape, and eye openness as reference image 1 — do NOT make the eyes smaller or narrower than shown. Eyes should be fully open and natural, not squinting. ONLY add glasses if reference image 1 shows the person wearing glasses.';
+const FALLBACK_DESCRIPTION = 'A full-grown adult person (20-30 years old) whose face, hair, skin tone, build, and ALL facial features (including glasses if present) exactly match reference image 1 — reproduce the identical physical appearance including eyewear. This person is NOT a child, NOT a teenager.';
 
 /**
  * 解读用户自拍照片，返回文字外貌描述
@@ -28,23 +28,23 @@ const FALLBACK_DESCRIPTION = 'A full-grown adult person (20-30 years old) whose 
  * @returns {Promise<string>} 用户外貌文字描述
  */
 async function describeUser(userImage) {
-  // 优先使用火山引擎 doubao vision（稳定、快速）
-  if (VOLCENGINE_API_KEY && VOLCENGINE_BASE_URL && VISION_MODEL) {
-    try {
-      console.log('[UserDescriber] 使用火山引擎视觉模型解读照片:', VISION_MODEL);
-      return await callVisionAPI(VOLCENGINE_BASE_URL + '/chat/completions', VOLCENGINE_API_KEY, userImage, VISION_MODEL);
-    } catch (err) {
-      console.warn('[UserDescriber] 火山引擎视觉模型调用失败:', err.message, '，尝试备选');
-    }
-  }
-
-  // 备选：LAS 中转平台
+  // 有 LAS 中转平台（Nano_Banana_Pro 支持 vision）
   if (LAS_API_KEY) {
     try {
       console.log('[UserDescriber] 使用 LAS 中转平台解读照片');
       return await callVisionAPI(LAS_BASE_URL + '/chat/completions', LAS_API_KEY, userImage, LAS_VISION_MODEL);
     } catch (err) {
       console.warn('[UserDescriber] LAS 调用失败:', err.message, '，使用参考图描述');
+    }
+  }
+
+  // 有火山引擎视觉模型
+  if (VOLCENGINE_API_KEY && VOLCENGINE_BASE_URL && VISION_MODEL) {
+    try {
+      console.log('[UserDescriber] 使用火山引擎视觉模型解读照片');
+      return await callVisionAPI(VOLCENGINE_BASE_URL + '/chat/completions', VOLCENGINE_API_KEY, userImage);
+    } catch (err) {
+      console.warn('[UserDescriber] 火山引擎视觉模型调用失败:', err.message, '，使用参考图描述');
     }
   }
 

@@ -1,0 +1,145 @@
+{
+  "_readme": "editRegions 坐标使用 0~1 归一化值（相对图片宽高）。校准工具: node server/calibrate_regions.js",
+
+  "scene1_male": {
+    "templateFile": "生成测试/relay_test/scene1-M.jpg",
+    "description": "场景1 男球迷模板：4人构图（1856x2304），目标=左数第2位（亚洲男性球迷）",
+    "targetPerson": "the fan (Asian male) in the group",
+    "editRegions": [
+      {
+        "id": "target_face",
+        "x": 0.250,
+        "y": 0.167,
+        "width": 0.250,
+        "height": 0.333,
+        "feather": 24,
+        "_note": "新底图校准(2026-04-26): 新底图1856x2304，视觉检测脸部中心位置"
+      }
+    ]
+  },
+
+  "scene1_female": {
+    "templateFile": "生成测试/relay_test/scene1-F.jpg",
+    "description": "场景1 女球迷模板：4人构图（1856x2304），目标=左数第3位（女性球迷）",
+    "targetPerson": "the fan (Asian female) in the group",
+    "editRegions": [
+      {
+        "id": "target_face",
+        "x": 0.427,
+        "y": 0.149,
+        "width": 0.225,
+        "height": 0.372,
+        "feather": 24,
+        "_note": "新底图校准(2026-04-26): 新底图1856x2304，视觉检测脸部中心位置"
+      }
+    ]
+  },
+
+  "scene2_male": {
+    "templateFile": "生成测试/relay_test/scene2-M.jpg",
+    "description": "场景2 男球迷模板：更衣室4人构图，目标=左数第3位（亚洲男性球迷）",
+    "targetPerson": "the third person from the left",
+    "editRegions": [
+      {
+        "id": "target_face",
+        "x": 0.43,
+        "y": 0.18,
+        "width": 0.30,
+        "height": 0.48,
+        "feather": 32,
+        "_note": "覆盖头部+颈部+上身，y=0.18~0.66。Seedream i2i构图偏移约18%，生成图中脸部约在y=0.38~0.56，此区域确保完整覆盖"
+      }
+    ],
+    "restore_regions": [
+      {
+        "id": "jersey_logo",
+        "x": 0.46,
+        "y": 0.42,
+        "width": 0.22,
+        "height": 0.24,
+        "_note": "拜仁会徽+T-Mobile logo区域（模板坐标），从原始模板1:1还原，防止大editRegion污染logo"
+      }
+    ]
+  },
+
+  "scene2_female": {
+    "templateFile": "生成测试/relay_test/scene2-F.png",
+    "description": "场景2 女球迷模板：更衣室4人构图，目标=左数第3位（女性球迷）",
+    "targetPerson": "the third person from the left",
+    "editRegions": [
+      {
+        "id": "target_face",
+        "x": 0.43,
+        "y": 0.18,
+        "width": 0.27,
+        "height": 0.48,
+        "feather": 32,
+        "_note": "覆盖头部+颈部+上身，y=0.18~0.66。同男性模板，生成图中脸部约在y=0.38~0.56"
+      }
+    ],
+    "restore_regions": [
+      {
+        "id": "jersey_logo",
+        "x": 0.45,
+        "y": 0.41,
+        "width": 0.20,
+        "height": 0.22,
+        "_note": "拜仁会徽+T-Mobile logo区域（模板坐标），从原始模板1:1还原"
+      }
+    ]
+  },
+
+  "scene3_male": {
+    "templateFile": "生成测试/relay_test/scene3-M.jpg",
+    "description": "场景3 男球迷模板：5人构图，目标=左数第2位（亚洲男性球迷，与吉祥物击掌）",
+    "targetPerson": "the second person from the left",
+    "editRegions": [
+      {
+        "id": "target_face",
+        "x": 0.22,
+        "y": 0.10,
+        "width": 0.23,
+        "height": 0.30,
+        "feather": 24,
+        "_note": "新底图校准(2026-04-26): 新底图1844x2304，cx=0.335 cy=0.262，x左移至0.22覆盖脸部左侧，底边约y=0.40"
+      }
+    ],
+    "restore_regions": [
+      {
+        "id": "jersey_logo",
+        "x": 0.22,
+        "y": 0.37,
+        "width": 0.23,
+        "height": 0.16,
+        "_note": "Bayern会徽+T-Mobile logo区域，从模板1:1还原，防止羽化溢出"
+      }
+    ]
+  },
+
+  "scene3_female": {
+    "templateFile": "生成测试/relay_test/scene3-F.jpg",
+    "description": "场景3 女球迷模板：5人构图，目标=左数第3位（女性球迷，中间位置，与吉祥物击掌）",
+    "targetPerson": "the third person from the left",
+    "editRegions": [
+      {
+        "id": "target_face",
+        "x": 0.31,
+        "y": 0.18,
+        "width": 0.22,
+        "height": 0.30,
+        "feather": 24,
+        "_note": "新底图校准(2026-04-26): cx=0.423 cy=0.345，x左移至0.31覆盖脸部左侧，底边约y=0.48"
+      }
+    ],
+    "restore_regions": [
+      {
+        "id": "jersey_logo",
+        "x": 0.31,
+        "y": 0.44,
+        "width": 0.22,
+        "height": 0.18,
+        "_note": "Bayern会徽+T-Mobile logo区域，从模板1:1还原"
+      }
+    ]
+  }
+}

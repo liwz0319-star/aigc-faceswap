@@ -11,8 +11,8 @@
  * 策略:
  *   1. 对基础图裁出包含用户 + 两侧球员 + 上方 logo 的大区域
  *   2. 将裁切区域放大为局部模板
- *   3. 用 Seedream 仅对该局部做身份/发型/身高/logo 精修
- *   4. 将局部结果缩回并覆盖回原图
+ *   3. 同时参考目标效果图同区域，做身份/发型/身高/logo 精修
+ *   4. 将局部结果软边融合回原图
  */
 
 const fs = require('fs');
@@ -37,6 +37,7 @@ const { describeUserAppearance } = require('./server/src/visionClient');
 
 const DEFAULT_BASE_IMAGE = path.join(__dirname, '生成测试', 'faceswap_output', 'scene1_auto_M_1777043466858.jpg');
 const DEFAULT_USER_PHOTO = path.join(__dirname, '生成测试', '照片', 'efd3b40c22f3aefc65349fdd4a768d59.jpg');
+const DEFAULT_TARGET_TEMPLATE = path.join(__dirname, '生成测试', '效果图', 'scene1.png');
 const OUTPUT_DIR = path.join(__dirname, '生成测试', 'faceswap_output');
 const LOG_DIR = path.join(__dirname, '生成测试', 'prompt_logs');
 
@@ -71,10 +72,10 @@ function downloadFile(url, dest) {
 }
 
 function computeCropBox(width, height) {
-  const left = Math.round(width * 0.10);
-  const top = Math.round(height * 0.12);
-  const cropWidth = Math.round(width * 0.80);
-  const cropHeight = Math.round(height * 0.62);
+  const left = Math.round(width * 0.08);
+  const top = Math.round(height * 0.08);
+  const cropWidth = Math.round(width * 0.84);
+  const cropHeight = Math.round(height * 0.74);
 
   return {
     left,
@@ -87,17 +88,18 @@ function computeCropBox(width, height) {
 function buildRefinePrompt(userDescription) {
   return [
     'Photorealistic local crop refinement of a group photo.',
-    'Image 1 is the crop template from the already-generated result. Preserve this crop composition with maximum fidelity.',
-    'Image 2 is the identity reference of the target person.',
-    userDescription ? `Identity details from Image 2: ${userDescription}` : '',
+    'Image 1 is the target-style crop from the desired effect image. Use it as the visual target for clean composition, clear logos, and overall balance.',
+    'Image 2 is the crop template from the already-generated result. Preserve its local scene continuity and person arrangement.',
+    'Image 3 is the identity reference of the target person.',
+    userDescription ? `Identity details from Image 3: ${userDescription}` : '',
     'Refine ONLY the second person from the left in this crop.',
     'Critical refinement goals:',
-    '- The target person must clearly remain the exact same person as Image 2.',
+    '- The target person must clearly remain the exact same person as Image 3.',
     '- Raise the target person to the same adult standing height as the adjacent players. Match eye-line, shoulder height, torso length, hip height, and leg length to neighboring players.',
     '- Keep realistic adult male proportions. No short body, no compressed torso, no oversized head, no childlike proportions.',
-    '- Use the natural hairstyle from Image 2. Keep the real hair silhouette, hairline, volume, and natural side-fringe shape from the user photo.',
+    '- Use the natural hairstyle from Image 3. Keep the real hair silhouette, hairline, volume, and natural side-fringe shape from the user photo.',
     '- Do not turn the hairstyle into a bowl cut, flat cap-like fringe, or stereotyped generic haircut.',
-    '- Keep the black-framed glasses from Image 2.',
+    '- Keep the black-framed glasses from Image 3.',
     '- Keep all other people, clothes, pose, railing, statue, carousel, and environment unchanged.',
     '- The circular PAULANER and FC BAYERN logo signs in the background must be crisp, centered, undistorted, and clearly readable.',
     '- Maintain photorealism, sharp facial detail, and coherent lighting.',
@@ -112,15 +114,52 @@ const REFINE_NEGATIVE_PROMPT = [
   'cartoon, illustration, doll face, beautified face, identity drift, low quality, blur',
 ].join(' ');
 
+async function createFeatheredOverlay(inputPath, width, height) {
+  const feather = Math.max(40, Math.round(Math.min(width, height) * 0.035));
+  const alphaBase = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([{
+      input: {
+        create: {
+          width: Math.max(1, width - feather * 2),
+          height: Math.max(1, height - feather * 2),
+          channels: 4,
+          background: { r: 255, g: 255, b: 255, alpha: 1 },
+        },
+      },
+      left: feather,
+      top: feather,
+    }])
+    .blur(feather / 2)
+    .png()
+    .toBuffer();
+
+  return sharp(inputPath)
+    .resize(width, height, { fit: 'fill' })
+    .composite([{ input: alphaBase, blend: 'dest-in' }])
+    .png()
+    .toBuffer();
+}
+
 async function main() {
   const baseImagePath = process.argv[2] || DEFAULT_BASE_IMAGE;
   const userPhotoPath = process.argv[3] || DEFAULT_USER_PHOTO;
+  const targetTemplatePath = process.argv[4] || DEFAULT_TARGET_TEMPLATE;
 
   if (!fs.existsSync(baseImagePath)) {
     throw new Error(`基础图不存在: ${baseImagePath}`);
   }
   if (!fs.existsSync(userPhotoPath)) {
     throw new Error(`用户照片不存在: ${userPhotoPath}`);
+  }
+  if (!fs.existsSync(targetTemplatePath)) {
+    throw new Error(`目标模板不存在: ${targetTemplatePath}`);
   }
 
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -131,6 +170,7 @@ async function main() {
   console.log('========================================');
   console.log(`基础图: ${path.basename(baseImagePath)}`);
   console.log(`用户照: ${path.basename(userPhotoPath)}`);
+  console.log(`目标模板: ${path.basename(targetTemplatePath)}`);
 
   const metadata = await sharp(baseImagePath).metadata();
   const cropBox = computeCropBox(metadata.width, metadata.height);
@@ -138,13 +178,23 @@ async function main() {
 
   const cropBuffer = await sharp(baseImagePath)
     .extract(cropBox)
-    .resize(1792, 1792, { fit: 'fill' })
+    .resize(1792, 2048, { fit: 'fill' })
     .jpeg({ quality: 95 })
     .toBuffer();
 
   const timestamp = Date.now();
   const cropTemplatePath = path.join(OUTPUT_DIR, `scene1_refine_crop_template_${timestamp}.jpg`);
   fs.writeFileSync(cropTemplatePath, cropBuffer);
+
+  const targetMetadata = await sharp(targetTemplatePath).metadata();
+  const targetCropBox = computeCropBox(targetMetadata.width, targetMetadata.height);
+  const targetCropBuffer = await sharp(targetTemplatePath)
+    .extract(targetCropBox)
+    .resize(1792, 2048, { fit: 'fill' })
+    .jpeg({ quality: 95 })
+    .toBuffer();
+  const targetCropPath = path.join(OUTPUT_DIR, `scene1_refine_target_crop_${timestamp}.jpg`);
+  fs.writeFileSync(targetCropPath, targetCropBuffer);
 
   let userDescription = '';
   try {
@@ -165,22 +215,28 @@ async function main() {
   const result = await generateNativeImage({
     prompt,
     negative_prompt: REFINE_NEGATIVE_PROMPT,
-    images: [toBase64DataUrl(cropTemplatePath), toBase64DataUrl(userPhotoPath)],
-    size: '2048x2048',
-    scene_params: { strength: 0.62, guidance_scale: 10 },
+    images: [
+      toBase64DataUrl(targetCropPath),
+      toBase64DataUrl(cropTemplatePath),
+      toBase64DataUrl(userPhotoPath),
+    ],
+    size: '1792x2048',
+    scene_params: { strength: 0.58, guidance_scale: 10 },
   });
 
   const refinedCropPath = path.join(OUTPUT_DIR, `scene1_refine_crop_${timestamp}.jpg`);
   await downloadFile(result.url, refinedCropPath);
 
-  const refinedCropBuffer = await sharp(refinedCropPath)
-    .resize(cropBox.width, cropBox.height, { fit: 'fill' })
-    .toBuffer();
+  const refinedCropBuffer = await createFeatheredOverlay(
+    refinedCropPath,
+    cropBox.width,
+    cropBox.height,
+  );
 
   const compositePath = path.join(OUTPUT_DIR, `scene1_refined_final_${timestamp}.jpg`);
   await sharp(baseImagePath)
     .composite([{ input: refinedCropBuffer, left: cropBox.left, top: cropBox.top }])
-    .jpeg({ quality: 95 })
+    .png()
     .toFile(compositePath);
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
@@ -200,6 +256,7 @@ async function main() {
     result: {
       elapsed,
       url: result.url,
+      targetCropPath: path.basename(targetCropPath),
       cropTemplatePath: path.basename(cropTemplatePath),
       refinedCropPath: path.basename(refinedCropPath),
       compositePath: path.basename(compositePath),

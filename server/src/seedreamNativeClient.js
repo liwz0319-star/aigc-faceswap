@@ -29,6 +29,9 @@ async function generateNativeImage({ prompt, images = [], size = '1664x1664', ne
     throw new Error('SEEDREAM_NATIVE_API_KEY 未配置');
   }
 
+  // 允许 scene_params.model 覆盖全局模型（用于场景级模型切换）
+  const resolvedModel = scene_params.model || MODEL;
+
   const strength = scene_params.strength ?? DEFAULT_STRENGTH;
   const guidanceScale = scene_params.guidance_scale ?? DEFAULT_GUIDANCE;
   const sceneNegPrompt = scene_params.negative_prompt || '';
@@ -37,7 +40,7 @@ async function generateNativeImage({ prompt, images = [], size = '1664x1664', ne
   const combinedNegPrompt = [sceneNegPrompt, negative_prompt].filter(Boolean).join(', ');
 
   const payload = {
-    model: MODEL,
+    model: resolvedModel,
     prompt,
     sequential_image_generation: 'disabled',
     response_format: 'url',
@@ -52,7 +55,7 @@ async function generateNativeImage({ prompt, images = [], size = '1664x1664', ne
   }
 
   // Seedream 5.0 不支持 guidance_scale
-  if (guidanceScale > 0 && !MODEL.includes('5-0')) {
+  if (guidanceScale > 0 && !resolvedModel.includes('5-0')) {
     payload.guidance_scale = guidanceScale;
   }
 
@@ -60,7 +63,7 @@ async function generateNativeImage({ prompt, images = [], size = '1664x1664', ne
     payload.negative_prompt = combinedNegPrompt;
   }
 
-  console.log(`[NativeClient] model=${MODEL} | images=${images.length} | size=${size} | strength=${payload.strength || 'N/A'} | guidance=${payload.guidance_scale || 'N/A'}`);
+  console.log(`[NativeClient] model=${resolvedModel} | images=${images.length} | size=${size} | strength=${payload.strength || 'N/A'} | guidance=${payload.guidance_scale || 'N/A'}`);
 
   const response = await axios.post(API_URL, payload, {
     headers: {

@@ -1,0 +1,45 @@
+
+/**
+ * 直接提交合成任务的函数
+ * @param array $params 包含 star_ids, scene_id, user_image 等参数
+ * @param string $apiKey API密钥
+ * @param string $serverUrl 服务器地址
+ * @return array 返回结果
+ */
+
+function GetTaskId($take_id, $apiKey = 'StavZC8fVTLd4xOkhqKbsyGjgEn39WHF6RmBA2eUIl7MYNPc' ) 
+{ 
+    
+    if (empty($take_id)) {
+        return ['status' => 'error','success' => false, 'error' => 'take_id 是必填字段'];
+    }
+    
+    $url = 'http://111.229.177.65:3001/api/v1/synthesis/query/' . $take_id;
+
+    $curl = curl_init();
+    curl_setopt_array($curl, [
+        CURLOPT_URL => $url,
+        CURLOPT_CUSTOMREQUEST => 'GET',  // 保持为GET
+        // 移除CURLOPT_POSTFIELDS，因为GET请求不需要发送请求体
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'x-api-key: ' . $apiKey
+        ],
+        CURLOPT_TIMEOUT => 60
+    ]);
+
+    $response = curl_exec($curl);
+    $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($curl);
+    curl_close($curl);
+
+    if ($curlError) {
+        return ['success' => false, 'error' => $curlError];
+    }
+
+    return [
+        'success' => $httpCode >= 200 && $httpCode < 300, 
+        'response' => json_decode($response, true) ?: $response
+    ];
+}
