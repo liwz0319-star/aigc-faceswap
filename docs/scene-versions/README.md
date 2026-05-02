@@ -17,6 +17,17 @@
 - [scene3/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene3\README.md)
 - [scene4/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene4\README.md)
 
+## 场景配置拆分
+
+- 批量脚本运行入口仍然是 [test-faceswap-inpaint-scenes.js](F:\AAA Work\AIproject\demo\球星球迷合照\test-faceswap-inpaint-scenes.js)
+- 四个场景的独立配置现在位于 [scene-configs](F:\AAA Work\AIproject\demo\球星球迷合照\scene-configs)
+- 以后只调某一个场景时，直接修改对应文件即可：
+- [scene1.js](F:\AAA Work\AIproject\demo\球星球迷合照\scene-configs\scene1.js)
+- [scene2.js](F:\AAA Work\AIproject\demo\球星球迷合照\scene-configs\scene2.js)
+- [scene3.js](F:\AAA Work\AIproject\demo\球星球迷合照\scene-configs\scene3.js)
+- [scene4.js](F:\AAA Work\AIproject\demo\球星球迷合照\scene-configs\scene4.js)
+- 公共 inpaint prompt profile 位于 [profiles.js](F:\AAA Work\AIproject\demo\球星球迷合照\scene-configs\profiles.js)
+
 ## 版本线总览
 
 | 场景 | 主要版本线 | 当前建议查看 |

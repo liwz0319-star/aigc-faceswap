@@ -1,0 +1,56 @@
+module.exports = {
+  male: {
+    file: '场景4男.png', label: '场景4男（啤酒节，替换最左）',
+    mode: 'inpaint', size: '2560x1536', guidance: 10,
+    controlProfile: 'scene4_festival',
+    refScale: 0.68, refAnchor: 'north', refOffsetY: 0.08,
+    extraPromptLines: [
+      'Placeholder coverage: Completely replace the left placeholder head, including the left rim and right rim of the blank head.',
+      'Single-head rule: Keep only one face aligned to the placeholder neck. No adjacent second face and no leftover mannequin silhouette.',
+      'Head size lock: Keep the inserted head modest and proportional to the shoulders and torso. Do NOT enlarge the head to fill the whole mask.',
+      'Keep head small enough to match the original player head size in the group photo.',
+    ],
+    extraNegativeTerms: [
+      'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
+      'oversized head', 'giant head', 'big face small body',
+      'rectangular crop edge', 'visible box edge', 'background patch edge',
+    ],
+    mask: {
+      cx: 72, cy: 126, w: 60, h: 90,
+      apiCx: 71, apiCy: 126, apiW: 58, apiH: 88,
+      compCx: 71, compCy: 126, compW: 68, compH: 104,
+      compSolidTopH: 12,
+      compSolidTopInset: 8,
+      compFeather: 10,
+    },
+  },
+  female: {
+    file: '场景4女.png', label: '场景4女（啤酒节，替换最左）',
+    mode: 'inpaint', size: '2560x1536', guidance: 10,
+    controlProfile: 'scene4_festival',
+    refScale: 0.60, refAnchor: 'north', refOffsetY: 0.08,
+    extraPromptLines: [
+      'Jaw completion: The full lower face must be fully generated, including nose base, lips, chin, jawline, and the front of the neck.',
+      'No mannequin carry-over: Do NOT leave any mannequin skin, blank mannequin texture, or melted placeholder surface under the mouth or around the chin.',
+      'Festival portrait fit: Keep the head naturally sized for the group photo and do not overfill the available head region.',
+      'Placeholder coverage: Completely replace the left placeholder head, including the left rim and right rim of the blank head.',
+      'Single-head rule: Keep only one face aligned to the placeholder neck. No adjacent second face and no leftover mannequin silhouette.',
+      'Head size lock: Keep the inserted head modest and proportional to the shoulders and torso. Do NOT enlarge the head to fill the whole mask.',
+      'Keep the female head the same size as the original player head in Image 1, not larger.',
+    ],
+    extraNegativeTerms: [
+      'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
+      'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
+      'oversized head', 'giant head', 'big face small body',
+      'rectangular crop edge', 'visible box edge', 'background patch edge',
+    ],
+    mask: {
+      cx: 82, cy: 96, w: 58, h: 94,
+      apiCx: 81, apiCy: 98, apiW: 56, apiH: 92,
+      compCx: 81, compCy: 100, compW: 72, compH: 112,
+      compSolidTopH: 12,
+      compSolidTopInset: 8,
+      compFeather: 10,
+    },
+  },
+};

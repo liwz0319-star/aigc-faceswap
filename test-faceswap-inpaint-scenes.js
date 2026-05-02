@@ -62,6 +62,11 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+/*
+ * Legacy inline scene config block.
+ * Runtime now loads scene configs from ./scene-configs so each scene can be tuned independently.
+ */
+if (false) {
 // Inpaint prompt controls are isolated by profile so scene1/4 can be tuned
 // independently without perturbing scene2/3.
 const INPAINT_CONTROL_PROFILES = {
@@ -234,7 +239,7 @@ const SCENE_CONFIGS = {
     female: {
       file: '场景3.jpg', label: '场景3（通道举9号球衣）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
-      refScale: 0.39, refAnchor: 'north',
+      refScale: 0.36, refAnchor: 'north', refOffsetY: 0.08,
       extraPromptLines: [
         '● Full crown visibility: Keep the entire top hair, crown, and upper hair volume fully visible above the forehead.',
         '● Hair solidity: Hair at the top of the head must be dense, opaque, and well-defined. No translucent top hair and no faded crown.',
@@ -245,12 +250,12 @@ const SCENE_CONFIGS = {
         'oversized female head', 'faded crown', 'translucent top hair', 'missing top hair', 'cropped crown',
       ],
       mask: {
-        cx: 934, cy: 288, w: 202, h: 362,
-        apiCx: 934, apiCy: 276, apiW: 178, apiH: 340,
-        compCx: 934, compCy: 286, compW: 214, compH: 396,
-        compSolidTopH: 112,
-        compSolidTopInset: 18,
-        compFeather: 16,
+        cx: 934, cy: 284, w: 194, h: 370,
+        apiCx: 934, apiCy: 270, apiW: 168, apiH: 352,
+        compCx: 934, compCy: 278, compW: 196, compH: 370,
+        compSolidTopH: 136,
+        compSolidTopInset: 26,
+        compFeather: 10,
       },
     },
   },
@@ -316,7 +321,8 @@ const SCENE_CONFIGS = {
 
 // ── 工具函数 ──────────────────────────────────────────────────
 Object.assign(SCENE_CONFIGS['3'].female, {
-  refScale: 0.39,
+  refScale: 0.36,
+  refOffsetY: 0.08,
   extraPromptLines: [
     'Full crown visibility: Keep the entire top hair, crown, and upper hair volume fully visible above the forehead.',
     'Hair solidity: Hair at the top of the head must be dense, opaque, and well-defined. No translucent top hair and no faded crown.',
@@ -325,26 +331,19 @@ Object.assign(SCENE_CONFIGS['3'].female, {
     'Long-hair routing: If the person in Image 2 has medium or long hair, let the side hair fall naturally behind the shoulders and upper back of Image 1.',
     'Do NOT drape long hair across the front of the jersey or over the center chest area.',
     'Shoulder clearance: Keep the front neckline and upper chest of the jersey clean and unobstructed. Any longer side hair should stay near the outer shoulder line or behind it.',
+    'Shoulder integrity: Keep the original shoulder line and jersey shoulder seam from Image 1 clean and single. No duplicate shoulder edge, no ghost shoulder, and no second neck or hair shadow on the shoulders.',
+    'Hair-tip clarity: The lower ends of the hair should taper into visible strands with a clean natural edge, not into a foggy or airbrushed blur.',
   ],
   extraNegativeTerms: [
     'oversized female head', 'faded crown', 'translucent top hair', 'missing top hair', 'cropped crown',
     'long hair over front jersey', 'hair across chest', 'hair covering shirt collar', 'front-draped hair curtain',
+    'ghost shoulder', 'duplicate shoulder edge', 'double shoulder line', 'bald crown', 'flat top hair',
+    'foggy hair tips', 'airbrushed hair ends', 'hair blur cloud', 'mushy hair edge',
   ],
 });
+}
 
-Object.assign(SCENE_CONFIGS['3'].female, {
-  refScale: 0.39,
-  extraPromptLines: [
-    ...SCENE_CONFIGS['3'].female.extraPromptLines,
-    'Long-hair routing: If the person in Image 2 has medium or long hair, let the side hair fall naturally behind the shoulders and upper back of Image 1.',
-    'Do NOT drape long hair across the front of the jersey or over the center chest area.',
-    'Shoulder clearance: Keep the front neckline and upper chest of the jersey clean and unobstructed. Any longer side hair should stay near the outer shoulder line or behind it.',
-  ],
-  extraNegativeTerms: [
-    ...SCENE_CONFIGS['3'].female.extraNegativeTerms,
-    'long hair over front jersey', 'hair across chest', 'hair covering shirt collar', 'front-draped hair curtain',
-  ],
-});
+const { INPAINT_CONTROL_PROFILES, SCENE_CONFIGS } = require('./scene-configs');
 
 function toBase64DataUrl(filePath) {
   const p   = filePath.replace(/\\/g, '/');
