@@ -58,6 +58,10 @@ const DEFAULT_PHOTOS = [
   'f:/AAA Work/AIproject/demo/球星球迷合照/生成测试/照片/image.png',
 ];
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
 // Inpaint prompt controls are isolated by profile so scene1/4 can be tuned
 // independently without perturbing scene2/3.
 const INPAINT_CONTROL_PROFILES = {
@@ -73,10 +77,13 @@ const INPAINT_CONTROL_PROFILES = {
       '  Do NOT extend facial features below the placeholder chin area or outside the intended head silhouette.',
       '● Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
       '● Locker-room portrait framing: Keep the head centered and compact inside the mannequin head area.',
+      '● Full-head visibility: Show the entire head from crown to chin, with both cheeks fully inside the blank head silhouette.',
+      '● Center lock: Do NOT slide the face left or right inside the mannequin head. Keep the nose centered on the mannequin head axis.',
     ],
     negativeTerms: [
       'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
       'blank mannequin face', 'featureless head', 'blue mannequin skin', 'unfinished head',
+      'half face', 'side-clipped face', 'cropped forehead', 'cropped chin', 'off-center face',
     ],
   },
   scene4_festival: {
@@ -86,10 +93,13 @@ const INPAINT_CONTROL_PROFILES = {
       '● No mannequin carry-over: Do NOT leave any mannequin skin, blank mannequin texture, or melted placeholder surface under the mouth or around the chin.',
       '● Festival portrait fit: Keep the head naturally sized for the group photo and do not overfill the available head region.',
       '● Hair edge quality: Keep the hairline and outer hair edges clean and natural, with no dark halo, soot-like fringe, or muddy edge glow.',
+      '● Placeholder coverage: Fully cover the blank placeholder head from ear to ear. Do NOT leave any visible placeholder edge on the left or right side.',
+      '● Single-head rule: Generate exactly one aligned head centered on the placeholder. Do NOT create a second face beside the placeholder.',
     ],
     negativeTerms: [
       'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
       'dark halo around hair', 'black fringe around hairline', 'muddy hair edge',
+      'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
     ],
   },
 };
@@ -117,43 +127,48 @@ const SCENE_CONFIGS = {
       file: '场景1男.jpg', label: '场景1男（更衣室）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
       controlProfile: 'scene1_portrait',
-      refScale: 0.50, refAnchor: 'north',
+      refScale: 0.42, refAnchor: 'north', refOffsetY: 0.18,
       extraPromptLines: [
         '● Mannequin fit lock: The generated face must fit fully inside the mannequin head silhouette in Image 1.',
         '  Do NOT extend facial features below the placeholder chin area or outside the intended head silhouette.',
         '● Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
+        '● Full-head visibility: Keep the entire crown, forehead, cheeks, mouth, jawline, and chin visible inside the placeholder head.',
       ],
       extraNegativeTerms: [
         'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
+        'half face', 'side-clipped face', 'cropped forehead', 'cropped chin',
       ],
-      // Scene 1 uses a tighter API ellipse plus a slightly larger ellipse composite to avoid leaking edits into the jersey.
+      // Scene 1 needs more headroom and lateral tolerance than the earlier compact mask,
+      // otherwise any small drift from the model gets clipped into a half-face.
       mask: {
-        cx: 1140, cy: 850, rx: 76, ry: 110,
-        apiCx: 1140, apiCy: 850, apiRx: 76, apiRy: 110,
+        cx: 1140, cy: 846, rx: 84, ry: 124,
+        apiCx: 1140, apiCy: 846, apiRx: 84, apiRy: 124,
         compShape: 'ellipse',
-        compCx: 1140, compCy: 858, compRx: 92, compRy: 128,
-        compFeatherScale: 0.05,
+        compCx: 1140, compCy: 848, compRx: 108, compRy: 150,
+        compFeatherScale: 0.06,
       },
     },
     female: {
       file: '场景1女.jpg', label: '场景1女（更衣室）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
       controlProfile: 'scene1_portrait',
-      refScale: 0.46, refAnchor: 'north',
+      refScale: 0.40, refAnchor: 'north', refOffsetY: 0.18,
       extraPromptLines: [
         '● Mannequin fit lock: The generated face must fit fully inside the mannequin head silhouette in Image 1.',
         '  Do NOT extend facial features below the placeholder chin area or outside the intended head silhouette.',
         '● Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
+        '● Full-head visibility: Keep the entire crown, forehead, cheeks, mouth, jawline, and chin visible inside the placeholder head.',
       ],
       extraNegativeTerms: [
         'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
+        'half face', 'side-clipped face', 'cropped forehead', 'cropped chin',
       ],
       mask: {
-        cx: 1140, cy: 852, rx: 72, ry: 112,
-        apiCx: 1140, apiCy: 852, apiRx: 72, apiRy: 112,
+        cx: 1140, cy: 848, rx: 82, ry: 126,
+        apiCx: 1140, apiCy: 848, apiRx: 82, apiRy: 126,
         compShape: 'ellipse',
-        compCx: 1140, compCy: 860, compRx: 88, compRy: 128,
-        compFeatherScale: 0.05,
+        compCx: 1140, compCy: 850, compRx: 106, compRy: 152,
+        compFeatherScale: 0.06,
       },
     },
   },
@@ -213,41 +228,52 @@ const SCENE_CONFIGS = {
       file: '场景4男.png', label: '场景4男（啤酒节，替换最左）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
       controlProfile: 'scene4_festival',
-      refScale: 0.92, refAnchor: 'north',
-      // 回到 v22 一类的低位生成中心，保持整脸成型；composite 改成圆顶形，上保头发、下收领口
+      refScale: 0.82, refAnchor: 'north', refOffsetY: 0.10,
+      extraPromptLines: [
+        '● Placeholder coverage: Completely replace the left placeholder head, including the left rim and right rim of the blank head.',
+        '● Single-head rule: Keep only one face aligned to the placeholder neck. No adjacent second face and no leftover mannequin silhouette.',
+      ],
+      extraNegativeTerms: [
+        'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
+      ],
+      // Scene 4 needs a wider, slightly left-biased dome so the original placeholder
+      // cannot peek out when the model nudges the face to the right.
       mask: {
-        cx: 76, cy: 133, rx: 26, ry: 38,
-        apiCx: 76, apiCy: 133, apiRx: 26, apiRy: 38,
+        cx: 74, cy: 132, rx: 29, ry: 42,
+        apiCx: 74, apiCy: 132, apiRx: 29, apiRy: 42,
         compShape: 'hairDome',
-        compCx: 76, compCy: 118, compW: 50, compH: 76,
-        compDomeH: 22, compDomeExpandX: 2,
-        compSideHairW: 7, compSideHairH: 12,
-        compSideHairOffsetX: 16, compSideHairOffsetY: 22,
-        compFeather: 5,
+        compCx: 73, compCy: 120, compW: 62, compH: 92,
+        compDomeH: 26, compDomeExpandX: 4,
+        compSideHairW: 10, compSideHairH: 16,
+        compSideHairOffsetX: 20, compSideHairOffsetY: 24,
+        compFeather: 6,
       },
     },
     female: {
       file: '场景4女.png', label: '场景4女（啤酒节，替换最左）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
       controlProfile: 'scene4_festival',
-      refScale: 0.94, refAnchor: 'north',
+      refScale: 0.84, refAnchor: 'north', refOffsetY: 0.10,
       extraPromptLines: [
         '● Jaw completion: The full lower face must be fully generated, including nose base, lips, chin, jawline, and the front of the neck.',
         '● No mannequin carry-over: Do NOT leave any mannequin skin, blank mannequin texture, or melted placeholder surface under the mouth or around the chin.',
         '● Festival portrait fit: Keep the head naturally sized for the group photo and do not overfill the available head region.',
+        '● Placeholder coverage: Completely replace the left placeholder head, including the left rim and right rim of the blank head.',
+        '● Single-head rule: Keep only one face aligned to the placeholder neck. No adjacent second face and no leftover mannequin silhouette.',
       ],
       extraNegativeTerms: [
         'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
+        'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
       ],
       mask: {
-        cx: 87, cy: 90, rx: 27, ry: 40,
-        apiCx: 87, apiCy: 98, apiRx: 28, apiRy: 46,
+        cx: 84, cy: 92, rx: 30, ry: 44,
+        apiCx: 84, apiCy: 98, apiRx: 30, apiRy: 48,
         compShape: 'hairDome',
-        compCx: 86, compCy: 100, compW: 58, compH: 110,
-        compDomeH: 24, compDomeExpandX: 4,
-        compSideHairW: 10, compSideHairH: 18,
-        compSideHairOffsetX: 18, compSideHairOffsetY: 28,
-        compFeather: 5,
+        compCx: 83, compCy: 102, compW: 70, compH: 122,
+        compDomeH: 28, compDomeExpandX: 6,
+        compSideHairW: 12, compSideHairH: 20,
+        compSideHairOffsetX: 22, compSideHairOffsetY: 30,
+        compFeather: 6,
       },
     },
   },
@@ -263,7 +289,7 @@ function toBase64DataUrl(filePath) {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
-async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center') {
+async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center', offsetX = 0.5, offsetY = null) {
   if (!scale || scale >= 0.999) return toBase64DataUrl(filePath);
 
   const p = filePath.replace(/\\/g, '/');
@@ -281,10 +307,16 @@ async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center') 
     .resize(innerW, innerH, { fit: 'fill' })
     .toBuffer();
 
-  const left = Math.round((canvasW - innerW) / 2);
-  const top = anchor === 'north'
-    ? Math.max(0, Math.round((canvasH - innerH) * 0.12))
-    : Math.round((canvasH - innerH) / 2);
+  const remainingW = Math.max(0, canvasW - innerW);
+  const remainingH = Math.max(0, canvasH - innerH);
+  const resolvedOffsetX = typeof offsetX === 'number' ? offsetX : 0.5;
+  const resolvedOffsetY = typeof offsetY === 'number'
+    ? offsetY
+    : anchor === 'north'
+    ? 0.12
+    : 0.5;
+  const left = Math.round(clamp(remainingW * resolvedOffsetX, 0, remainingW));
+  const top = Math.round(clamp(remainingH * resolvedOffsetY, 0, remainingH));
 
   const out = await sharp({
     create: {
@@ -916,7 +948,13 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
 
     const meta = await sharp(templatePath).metadata();
     const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
-      ? await toScaledReferenceDataUrl(photoPath, conf.refScale, conf.refAnchor || 'center')
+      ? await toScaledReferenceDataUrl(
+          photoPath,
+          conf.refScale,
+          conf.refAnchor || 'center',
+          conf.refOffsetX ?? 0.5,
+          conf.refOffsetY
+        )
       : userBase64;
 
     let r;
