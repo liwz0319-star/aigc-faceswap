@@ -58,6 +58,42 @@ const DEFAULT_PHOTOS = [
   'f:/AAA Work/AIproject/demo/球星球迷合照/生成测试/照片/image.png',
 ];
 
+// Inpaint prompt controls are isolated by profile so scene1/4 can be tuned
+// independently without perturbing scene2/3.
+const INPAINT_CONTROL_PROFILES = {
+  default: {
+    taskLine: 'Task: Replace ONLY the head and neck area inside the white mask region with the person from Image 2.',
+    promptLines: [],
+    negativeTerms: [],
+  },
+  scene1_portrait: {
+    taskLine: 'Task: Replace ONLY the mannequin head and upper neck inside the white mask region with the person from Image 2.',
+    promptLines: [
+      '● Mannequin fit lock: The generated face must fit fully inside the mannequin head silhouette in Image 1.',
+      '  Do NOT extend facial features below the placeholder chin area or outside the intended head silhouette.',
+      '● Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
+      '● Locker-room portrait framing: Keep the head centered and compact inside the mannequin head area.',
+    ],
+    negativeTerms: [
+      'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
+      'blank mannequin face', 'featureless head', 'blue mannequin skin', 'unfinished head',
+    ],
+  },
+  scene4_festival: {
+    taskLine: 'Task: Replace ONLY the placeholder head and neck inside the white mask region with the person from Image 2 for a natural outdoor festival group portrait.',
+    promptLines: [
+      '● Jaw completion: The full lower face must be fully generated, including nose base, lips, chin, jawline, and the front of the neck.',
+      '● No mannequin carry-over: Do NOT leave any mannequin skin, blank mannequin texture, or melted placeholder surface under the mouth or around the chin.',
+      '● Festival portrait fit: Keep the head naturally sized for the group photo and do not overfill the available head region.',
+      '● Hair edge quality: Keep the hairline and outer hair edges clean and natural, with no dark halo, soot-like fringe, or muddy edge glow.',
+    ],
+    negativeTerms: [
+      'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
+      'dark halo around hair', 'black fringe around hairline', 'muddy hair edge',
+    ],
+  },
+};
+
 /**
  * 场景配置
  *
@@ -80,40 +116,139 @@ const SCENE_CONFIGS = {
     male: {
       file: '场景1男.jpg', label: '场景1男（更衣室）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
-      // 1856×2306 底图：椭圆校准位置（人偶脸部中心）
-      mask: { cx: 1140, cy: 850, rx: 85, ry: 125 },
+      controlProfile: 'scene1_portrait',
+      refScale: 0.50, refAnchor: 'north',
+      extraPromptLines: [
+        '● Mannequin fit lock: The generated face must fit fully inside the mannequin head silhouette in Image 1.',
+        '  Do NOT extend facial features below the placeholder chin area or outside the intended head silhouette.',
+        '● Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
+      ],
+      extraNegativeTerms: [
+        'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
+      ],
+      // Scene 1 uses a tighter API ellipse plus a slightly larger ellipse composite to avoid leaking edits into the jersey.
+      mask: {
+        cx: 1140, cy: 850, rx: 76, ry: 110,
+        apiCx: 1140, apiCy: 850, apiRx: 76, apiRy: 110,
+        compShape: 'ellipse',
+        compCx: 1140, compCy: 858, compRx: 92, compRy: 128,
+        compFeatherScale: 0.05,
+      },
     },
     female: {
       file: '场景1女.jpg', label: '场景1女（更衣室）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
-      mask: { cx: 1140, cy: 850, rx: 80, ry: 130 },
+      controlProfile: 'scene1_portrait',
+      refScale: 0.46, refAnchor: 'north',
+      extraPromptLines: [
+        '● Mannequin fit lock: The generated face must fit fully inside the mannequin head silhouette in Image 1.',
+        '  Do NOT extend facial features below the placeholder chin area or outside the intended head silhouette.',
+        '● Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
+      ],
+      extraNegativeTerms: [
+        'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
+      ],
+      mask: {
+        cx: 1140, cy: 852, rx: 72, ry: 112,
+        apiCx: 1140, apiCy: 852, apiRx: 72, apiRy: 112,
+        compShape: 'ellipse',
+        compCx: 1140, compCy: 860, compRx: 88, compRy: 128,
+        compFeatherScale: 0.05,
+      },
     },
   },
   '2': {
     male: {
-      file: '场景2.jpg', label: '场景2（球场举旗）',
+      file: '场景2.png', label: '场景2（球场举旗）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
-      // 1696×2120 底图：矩形（真实人体模板，效果最好）
-      mask: { cx: 1040, cy: 500, w: 400, h: 660 },
+      // 新底图：API 只改头颈小区域，composite 略放大用于边缘融合，避免衣服/旗子被 AI 重画
+      mask: {
+        cx: 360, cy: 174, w: 162, h: 236,
+        apiCx: 360, apiCy: 158, apiW: 128, apiH: 228,
+        compCx: 360, compCy: 174, compW: 162, compH: 236,
+        compSolidTopH: 68,
+      },
     },
     female: {
-      file: '场景2.jpg', label: '场景2（球场举旗）',
+      file: '场景2.png', label: '场景2（球场举旗）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
-      mask: { cx: 1040, cy: 500, w: 400, h: 660 },
+      mask: {
+        cx: 360, cy: 174, w: 162, h: 236,
+        apiCx: 360, apiCy: 158, apiW: 128, apiH: 228,
+        compCx: 360, compCy: 174, compW: 162, compH: 236,
+        compSolidTopH: 68,
+      },
+    },
+  },
+  '3': {
+    male: {
+      file: '场景3.jpg', label: '场景3（通道举9号球衣）',
+      mode: 'inpaint', size: '2560x1536', guidance: 10,
+      refScale: 0.51, refAnchor: 'north',
+      // 1867×1280 新底图：按场景2同逻辑重标，API 只重绘头颈，composite 略放大做融合
+      mask: {
+        cx: 934, cy: 292, w: 214, h: 346,
+        apiCx: 934, apiCy: 282, apiW: 190, apiH: 316,
+        compCx: 934, compCy: 290, compW: 226, compH: 362,
+        compSolidTopH: 88,
+        compSolidTopInset: 16,
+      },
+    },
+    female: {
+      file: '场景3.jpg', label: '场景3（通道举9号球衣）',
+      mode: 'inpaint', size: '2560x1536', guidance: 10,
+      refScale: 0.44, refAnchor: 'north',
+      mask: {
+        cx: 934, cy: 292, w: 214, h: 344,
+        apiCx: 934, apiCy: 280, apiW: 190, apiH: 318,
+        compCx: 934, compCy: 290, compW: 230, compH: 368,
+        compSolidTopH: 92,
+        compSolidTopInset: 18,
+        compFeather: 18,
+      },
     },
   },
   '4': {
     male: {
       file: '场景4男.png', label: '场景4男（啤酒节，替换最左）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
-      // 549×375 底图：椭圆校准位置
-      mask: { cx: 76, cy: 133, rx: 26, ry: 38 },
+      controlProfile: 'scene4_festival',
+      refScale: 0.92, refAnchor: 'north',
+      // 回到 v22 一类的低位生成中心，保持整脸成型；composite 改成圆顶形，上保头发、下收领口
+      mask: {
+        cx: 76, cy: 133, rx: 26, ry: 38,
+        apiCx: 76, apiCy: 133, apiRx: 26, apiRy: 38,
+        compShape: 'hairDome',
+        compCx: 76, compCy: 118, compW: 50, compH: 76,
+        compDomeH: 22, compDomeExpandX: 2,
+        compSideHairW: 7, compSideHairH: 12,
+        compSideHairOffsetX: 16, compSideHairOffsetY: 22,
+        compFeather: 5,
+      },
     },
     female: {
       file: '场景4女.png', label: '场景4女（啤酒节，替换最左）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
-      // 546×375 底图：cx=87已确认，cy待重新校准（见下方预览）
-      mask: { cx: 87, cy: 88, rx: 26, ry: 38 },
+      controlProfile: 'scene4_festival',
+      refScale: 0.94, refAnchor: 'north',
+      extraPromptLines: [
+        '● Jaw completion: The full lower face must be fully generated, including nose base, lips, chin, jawline, and the front of the neck.',
+        '● No mannequin carry-over: Do NOT leave any mannequin skin, blank mannequin texture, or melted placeholder surface under the mouth or around the chin.',
+        '● Festival portrait fit: Keep the head naturally sized for the group photo and do not overfill the available head region.',
+      ],
+      extraNegativeTerms: [
+        'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
+      ],
+      mask: {
+        cx: 87, cy: 90, rx: 27, ry: 40,
+        apiCx: 87, apiCy: 98, apiRx: 28, apiRy: 46,
+        compShape: 'hairDome',
+        compCx: 86, compCy: 100, compW: 58, compH: 110,
+        compDomeH: 24, compDomeExpandX: 4,
+        compSideHairW: 10, compSideHairH: 18,
+        compSideHairOffsetX: 18, compSideHairOffsetY: 28,
+        compFeather: 5,
+      },
     },
   },
 };
@@ -126,6 +261,44 @@ function toBase64DataUrl(filePath) {
   const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg'
              : ext === 'png' ? 'image/png' : `image/${ext}`;
   return `data:${mime};base64,${buf.toString('base64')}`;
+}
+
+async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center') {
+  if (!scale || scale >= 0.999) return toBase64DataUrl(filePath);
+
+  const p = filePath.replace(/\\/g, '/');
+  const ext = path.extname(p).slice(1).toLowerCase();
+  const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg'
+             : ext === 'png' ? 'image/png' : `image/${ext}`;
+  const input = fs.readFileSync(p);
+  const meta = await sharp(input).metadata();
+  const canvasW = meta.width || 1024;
+  const canvasH = meta.height || 1024;
+  const innerW = Math.max(1, Math.round(canvasW * scale));
+  const innerH = Math.max(1, Math.round(canvasH * scale));
+
+  const scaled = await sharp(input)
+    .resize(innerW, innerH, { fit: 'fill' })
+    .toBuffer();
+
+  const left = Math.round((canvasW - innerW) / 2);
+  const top = anchor === 'north'
+    ? Math.max(0, Math.round((canvasH - innerH) * 0.12))
+    : Math.round((canvasH - innerH) / 2);
+
+  const out = await sharp({
+    create: {
+      width: canvasW,
+      height: canvasH,
+      channels: 3,
+      background: { r: 255, g: 255, b: 255 },
+    },
+  })
+    .composite([{ input: scaled, left, top }])
+    .jpeg({ quality: 95 })
+    .toBuffer();
+
+  return `data:${mime};base64,${out.toString('base64')}`;
 }
 
 function downloadFile(url, dest) {
@@ -210,6 +383,128 @@ async function detectGender(userBase64) {
 async function buildMask(inputW, inputH, mask, outputW, outputH) {
   const scaleX = outputW / inputW;
   const scaleY = outputH / inputH;
+  const mcx = Math.round(mask.cx * scaleX);
+  const mcy = Math.round(mask.cy * scaleY);
+  if ('w' in mask && (mask.apiW || mask.apiH || mask.compW || mask.compH || mask.apiCx || mask.apiCy || mask.compCx || mask.compCy)) {
+    const apiCx = Math.round((mask.apiCx ?? mask.cx) * scaleX);
+    const apiCy = Math.round((mask.apiCy ?? mask.cy) * scaleY);
+    const apiW = Math.round((mask.apiW ?? mask.w) * scaleX);
+    const apiH = Math.round((mask.apiH ?? mask.h) * scaleY);
+    const apiLeft = apiCx - Math.round(apiW / 2);
+    const apiTop = apiCy - Math.round(apiH / 2);
+    let svgAPI = `<svg width="${outputW}" height="${outputH}">` +
+      `<rect x="${apiLeft}" y="${apiTop}" width="${apiW}" height="${apiH}" fill="white"/></svg>`;
+    if (mask.apiShape === 'hairDome') {
+      const domeH = Math.max(1, Math.round((mask.apiDomeH ?? Math.round(mask.apiH * 0.3)) * scaleY));
+      const domeExpandX = Math.max(0, Math.round((mask.apiDomeExpandX ?? 0) * scaleX));
+      const sideRx = Math.max(1, Math.round((mask.apiSideHairW ?? 0) * scaleX));
+      const sideRy = Math.max(1, Math.round((mask.apiSideHairH ?? 0) * scaleY));
+      const sideOffsetX = Math.max(0, Math.round((mask.apiSideHairOffsetX ?? 0) * scaleX));
+      const sideOffsetY = Math.max(0, Math.round((mask.apiSideHairOffsetY ?? 0) * scaleY));
+      const bodyTop = apiTop + Math.round(domeH * 0.52);
+      const bodyH = Math.max(1, apiTop + apiH - bodyTop);
+      const topRx = Math.round(apiW / 2) + domeExpandX;
+      const topCy = apiTop + domeH;
+      const leftHairCx = apiCx - sideOffsetX;
+      const rightHairCx = apiCx + sideOffsetX;
+      const hairCy = apiTop + sideOffsetY;
+      svgAPI = `<svg width="${outputW}" height="${outputH}">` +
+        `<ellipse cx="${apiCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
+        `<rect x="${apiLeft}" y="${bodyTop}" width="${apiW}" height="${bodyH}" fill="white"/>` +
+        `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+        `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+        `</svg>`;
+    }
+    const apiBuf = await sharp({ create: { width: outputW, height: outputH, channels: 3, background: { r: 0, g: 0, b: 0 } } })
+      .composite([{ input: Buffer.from(svgAPI), blend: 'over' }])
+      .png()
+      .toBuffer();
+
+    const compCx = Math.round((mask.compCx ?? mask.cx) * scaleX);
+    const compCy = Math.round((mask.compCy ?? mask.cy) * scaleY);
+    const compW = Math.round((mask.compW ?? mask.w) * scaleX);
+    const compH = Math.round((mask.compH ?? mask.h) * scaleY);
+    const compLeft = compCx - Math.round(compW / 2);
+    const compTop = compCy - Math.round(compH / 2);
+    const feather = mask.compFeather
+      ? Math.max(8, Math.round(mask.compFeather * Math.min(scaleX, scaleY)))
+      : Math.max(12, Math.round(Math.min(compW, compH) * 0.075));
+    let svgComp = `<svg width="${outputW}" height="${outputH}">` +
+      `<rect x="${compLeft}" y="${compTop}" width="${compW}" height="${compH}" fill="white"/></svg>`;
+    if (mask.compShape === 'hairDome') {
+      const domeH = Math.max(1, Math.round((mask.compDomeH ?? Math.round(mask.compH * 0.32)) * scaleY));
+      const domeExpandX = Math.max(0, Math.round((mask.compDomeExpandX ?? 0) * scaleX));
+      const sideRx = Math.max(1, Math.round((mask.compSideHairW ?? 0) * scaleX));
+      const sideRy = Math.max(1, Math.round((mask.compSideHairH ?? 0) * scaleY));
+      const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
+      const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
+      const bodyTop = compTop + Math.round(domeH * 0.55);
+      const bodyH = Math.max(1, compTop + compH - bodyTop);
+      const topRx = Math.round(compW / 2) + domeExpandX;
+      const topCy = compTop + domeH;
+      const leftHairCx = compCx - sideOffsetX;
+      const rightHairCx = compCx + sideOffsetX;
+      const hairCy = compTop + sideOffsetY;
+      svgComp = `<svg width="${outputW}" height="${outputH}">` +
+        `<ellipse cx="${compCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
+        `<rect x="${compLeft}" y="${bodyTop}" width="${compW}" height="${bodyH}" fill="white"/>` +
+        `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+        `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+        `</svg>`;
+    }
+    const compRaw = await sharp({ create: { width: outputW, height: outputH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: Buffer.from(svgComp), blend: 'over' }])
+      .png()
+      .toBuffer();
+    let compBuf = await sharp(compRaw).blur(feather).png().toBuffer();
+    if (mask.compShape === 'hairDome') {
+      const domeH = Math.max(1, Math.round((mask.compDomeH ?? Math.round(mask.compH * 0.32)) * scaleY));
+      const domeExpandX = Math.max(0, Math.round((mask.compDomeExpandX ?? 0) * scaleX));
+      const sideRx = Math.max(1, Math.round((mask.compSideHairW ?? 0) * scaleX));
+      const sideRy = Math.max(1, Math.round((mask.compSideHairH ?? 0) * scaleY));
+      const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
+      const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
+      const bodyTop = compTop + Math.round(domeH * 0.62);
+      const bodyInset = Math.max(1, Math.round(feather * 0.45));
+      const innerBodyH = Math.max(1, compTop + compH - bodyTop);
+      const innerTopRx = Math.max(1, Math.round(compW / 2) + domeExpandX - Math.round(feather * 0.35));
+      const innerTopRy = Math.max(1, domeH - Math.round(feather * 0.3));
+      const topCy = compTop + domeH;
+      const leftHairCx = compCx - sideOffsetX;
+      const rightHairCx = compCx + sideOffsetX;
+      const hairCy = compTop + sideOffsetY;
+      const innerSideRx = Math.max(1, sideRx - Math.round(feather * 0.25));
+      const innerSideRy = Math.max(1, sideRy - Math.round(feather * 0.2));
+      const svgSolidHair = `<svg width="${outputW}" height="${outputH}">` +
+        `<ellipse cx="${compCx}" cy="${topCy}" rx="${innerTopRx}" ry="${innerTopRy}" fill="white"/>` +
+        `<rect x="${compLeft + bodyInset}" y="${bodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>` +
+        `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
+        `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
+        `</svg>`;
+      compBuf = await sharp(compBuf)
+        .composite([{ input: Buffer.from(svgSolidHair), blend: 'over' }])
+        .png()
+        .toBuffer();
+      console.log(`    comp mask -> hairDome (${compLeft},${compTop}) ${compW}x${compH} feather=${feather}`);
+      return { apiBuf, compBuf, cx: mcx, cy: mcy };
+    }
+    const solidTopH = Math.min(compH, Math.max(0, Math.round((mask.compSolidTopH ?? 0) * scaleY)));
+    const solidTopInset = Math.max(0, Math.round((mask.compSolidTopInset ?? 0) * scaleX));
+    if (solidTopH > 0) {
+      const solidX = compLeft + solidTopInset;
+      const solidW = Math.max(1, compW - solidTopInset * 2);
+      const svgSolidTop = `<svg width="${outputW}" height="${outputH}">` +
+        `<rect x="${solidX}" y="${compTop}" width="${solidW}" height="${solidTopH}" fill="white"/></svg>`;
+      compBuf = await sharp(compBuf)
+        .composite([{ input: Buffer.from(svgSolidTop), blend: 'over' }])
+        .png()
+        .toBuffer();
+    }
+
+    console.log(`    api mask -> ${mask.apiShape === 'hairDome' ? 'hairDome' : 'rect'} (${apiLeft},${apiTop}) ${apiW}x${apiH} (${outputW}x${outputH})`);
+    console.log(`    comp mask -> rect (${compLeft},${compTop}) ${compW}x${compH} feather=${feather} solidTop=${solidTopH} inset=${solidTopInset}`);
+    return { apiBuf, compBuf, cx: mcx, cy: mcy };
+  }
   /*
   const rect = resolveMaskRect(mask, scaleX, scaleY, outputW, outputH);
 
@@ -256,11 +551,13 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
     console.log(`    mask → rect (${rx},${ry}) ${rw}×${rh} (${outputW}×${outputH})`);
   } else {
     // 椭圆 mask（场景1/4）：精确对齐人偶脸部
-    const mrx = Math.round(mask.rx * scaleX);
-    const mry = Math.round(mask.ry * scaleY);
+    const apiCx = Math.round((mask.apiCx ?? mask.cx) * scaleX);
+    const apiCy = Math.round((mask.apiCy ?? mask.cy) * scaleY);
+    const mrx = Math.round((mask.apiRx ?? mask.rx) * scaleX);
+    const mry = Math.round((mask.apiRy ?? mask.ry) * scaleY);
     svgAPI = `<svg width="${outputW}" height="${outputH}">` +
-      `<ellipse cx="${mcx}" cy="${mcy}" rx="${mrx}" ry="${mry}" fill="white"/></svg>`;
-    console.log(`    mask → ellipse cx=${mcx} cy=${mcy} rx=${mrx} ry=${mry} (${outputW}×${outputH})`);
+      `<ellipse cx="${apiCx}" cy="${apiCy}" rx="${mrx}" ry="${mry}" fill="white"/></svg>`;
+    console.log(`    mask → ellipse cx=${apiCx} cy=${apiCy} rx=${mrx} ry=${mry} (${outputW}×${outputH})`);
   }
   const apiBuf = await sharp({ create: { width: outputW, height: outputH, channels: 3, background: { r: 0, g: 0, b: 0 } } })
     .composite([{ input: Buffer.from(svgAPI), blend: 'over' }])
@@ -280,13 +577,71 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
     faceRx = Math.round(mask.rx * scaleX);
     faceRy = Math.round(mask.ry * scaleY);
   }
-  const cLeft   = mcx - Math.round(faceRx * 1.4);
-  const cRight  = mcx + Math.round(faceRx * 1.4);
-  const cTop    = mcy - Math.round(faceRy * 1.8);
-  const cBottom = mcy + Math.round(faceRy * 2.8);
+  if (mask.compShape === 'hairDome') {
+    const compCx = Math.round((mask.compCx ?? mask.cx) * scaleX);
+    const compCy = Math.round((mask.compCy ?? mask.cy) * scaleY);
+    const compW = Math.round((mask.compW ?? Math.round(faceRx * 2.2 / scaleX)) * scaleX);
+    const compH = Math.round((mask.compH ?? Math.round(faceRy * 2.3 / scaleY)) * scaleY);
+    const compLeft = compCx - Math.round(compW / 2);
+    const compTop = compCy - Math.round(compH / 2);
+    const domeH = Math.max(1, Math.round((mask.compDomeH ?? Math.round((mask.compH ?? faceRy * 2.3 / scaleY) * 0.32)) * scaleY));
+    const domeExpandX = Math.max(0, Math.round((mask.compDomeExpandX ?? 0) * scaleX));
+    const sideRx = Math.max(1, Math.round((mask.compSideHairW ?? 0) * scaleX));
+    const sideRy = Math.max(1, Math.round((mask.compSideHairH ?? 0) * scaleY));
+    const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
+    const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
+    const bodyTop = compTop + Math.round(domeH * 0.58);
+    const bodyH = Math.max(1, compTop + compH - bodyTop);
+    const topRx = Math.round(compW / 2) + domeExpandX;
+    const topCy = compTop + domeH;
+    const leftHairCx = compCx - sideOffsetX;
+    const rightHairCx = compCx + sideOffsetX;
+    const hairCy = compTop + sideOffsetY;
+    const feather = mask.compFeather
+      ? Math.max(6, Math.round(mask.compFeather * Math.min(scaleX, scaleY)))
+      : Math.max(10, Math.round(Math.min(compW, compH) * 0.06));
+
+    const svgCompDome = `<svg width="${outputW}" height="${outputH}">` +
+      `<ellipse cx="${compCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
+      `<rect x="${compLeft}" y="${bodyTop}" width="${compW}" height="${bodyH}" fill="white"/>` +
+      `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+      `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+      `</svg>`;
+    const compRawDome = await sharp({ create: { width: outputW, height: outputH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: Buffer.from(svgCompDome), blend: 'over' }])
+      .png()
+      .toBuffer();
+    const compBufDome = await sharp(compRawDome).blur(feather).png().toBuffer();
+    console.log(`    comp mask -> hairDome (${compLeft},${compTop}) ${compW}x${compH} feather=${feather}`);
+    return { apiBuf, compBuf: compBufDome, cx: compCx, cy: compCy };
+  }
+  if (mask.compShape === 'ellipse') {
+    const compCx = Math.round((mask.compCx ?? mask.cx) * scaleX);
+    const compCy = Math.round((mask.compCy ?? mask.cy) * scaleY);
+    const compRx = Math.round((mask.compRx ?? mask.rx) * scaleX);
+    const compRy = Math.round((mask.compRy ?? mask.ry) * scaleY);
+    const feather = Math.max(10, Math.round(Math.min(compRx, compRy) * (mask.compFeatherScale ?? 0.08)));
+    const svgCompEllipse = `<svg width="${outputW}" height="${outputH}">` +
+      `<ellipse cx="${compCx}" cy="${compCy}" rx="${compRx}" ry="${compRy}" fill="white"/></svg>`;
+    const compRawEllipse = await sharp({ create: { width: outputW, height: outputH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: Buffer.from(svgCompEllipse), blend: 'over' }])
+      .png()
+      .toBuffer();
+    const compBufEllipse = await sharp(compRawEllipse).blur(feather).png().toBuffer();
+    console.log(`    comp mask -> ellipse cx=${compCx} cy=${compCy} rx=${compRx} ry=${compRy} feather=${feather}`);
+    return { apiBuf, compBuf: compBufEllipse, cx: compCx, cy: compCy };
+  }
+  const compScaleX = mask.compScaleX ?? 1.4;
+  const compTopScale = mask.compTopScale ?? 1.8;
+  const compBottomScale = mask.compBottomScale ?? 2.8;
+  const compFeatherScale = mask.compFeatherScale ?? 0.12;
+  const cLeft   = mcx - Math.round(faceRx * compScaleX);
+  const cRight  = mcx + Math.round(faceRx * compScaleX);
+  const cTop    = mcy - Math.round(faceRy * compTopScale);
+  const cBottom = mcy + Math.round(faceRy * compBottomScale);
   const cW = cRight - cLeft;
   const cH = cBottom - cTop;
-  const feather = Math.max(15, Math.round(Math.min(cW, cH) * 0.12));
+  const feather = Math.max(12, Math.round(Math.min(cW, cH) * compFeatherScale));
 
   const svgComp = `<svg width="${outputW}" height="${outputH}">` +
     `<rect x="${cLeft}" y="${cTop}" width="${cW}" height="${cH}" fill="white"/></svg>`;
@@ -348,6 +703,7 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
                                  userBase64, userDescription, gender, outputDir = OUTPUT_DIR }) {
   const [outW, outH] = conf.size.split('x').map(Number);
   const templateBase64 = toBase64DataUrl(templatePath);
+  const controlProfile = INPAINT_CONTROL_PROFILES[conf.controlProfile] || INPAINT_CONTROL_PROFILES.default;
 
   // 构建 mask：apiBuf=RGB黑白矩形（发给API），compBuf=RGBA羽化矩形（post-composite用）
   const { apiBuf, compBuf } =
@@ -362,12 +718,17 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
     : gender === 'female'
     ? 'GENDER: The person is FEMALE — reproduce female facial structure and hairstyle faithfully.'
     : '';
+  const headNeckRatioLock = gender === 'male'
+    ? 'ANATOMY RATIO: Male head-length : neck-length must be about 2.3 : 1. Head length = top of head to chin. Neck length = chin to suprasternal notch (collarbone pit).'
+    : gender === 'female'
+    ? 'ANATOMY RATIO: Female head-length : neck-length must be about 2.0 : 1. Head length = top of head to chin. Neck length = chin to suprasternal notch (collarbone pit).'
+    : 'ANATOMY RATIO: Keep a realistic head-length to neck-length proportion. Head length = top of head to chin. Neck length = chin to suprasternal notch (collarbone pit).';
 
   // 换头提示词：强调自然融合、肤色衔接、颈部过渡、背景不变
   const prompt = [
     'Photorealistic head transplant composite. Ultra-high quality.',
     'Image 1 = scene background with a placeholder body. Image 2 = the real person to place into the scene.',
-    'Task: Replace ONLY the head and neck area inside the white rectangular mask with the person from Image 2.',
+    controlProfile.taskLine,
     '',
     'CRITICAL REQUIREMENTS:',
     '● Identity: The replaced head must be clearly recognizable as the SAME person from Image 2.',
@@ -376,27 +737,50 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
     '  the skin tone at the shoulder/body boundary — NO visible color jump or seam.',
     '● Neck-to-shoulder blend: Generate a natural, anatomically correct transition',
     '  from the neck into the shoulders/body of Image 1. No floating head effect.',
+    '● Head-to-neck proportion: Keep the head length and neck length anatomically correct.',
+    '  Do NOT make the neck too short, too long, too thick, or too thin relative to the head.',
+    '● Hair quality: Keep the full hairstyle visible up to the crown with crisp, opaque hair strands.',
+    '  No translucent hair, no faded top hair, no blurry hairline, and no missing hair volume.',
+    '● Full-face visibility: The entire face must be fully visible and complete above the jersey line.',
+    '  Both eyes, nose, mouth, chin, and jawline must be fully shown with no cropping, no missing lower face, and no partial face.',
+    '● No face obstruction: The jersey in Image 1 sits below the chin. It must NOT cover or merge into the mouth, chin, or jaw.',
+    '  Keep a clear gap and clean separation between the lower face/neck and the top edge of the jersey.',
     '● Edge feathering: The boundary of the replaced region must fade seamlessly',
     '  into the surrounding background — soft edges, no hard cutout lines.',
     '● Background lock: ALL pixels OUTSIDE the white mask region must remain',
     '  pixel-perfect identical to Image 1. Do NOT alter background, lighting, or props.',
+    '● Clothing lock: Do NOT redraw or redesign the jersey, collar, shoulders, hands, flag, or printed letters.',
+    '  Preserve the original clothing structure and prop geometry from Image 1.',
     '● Lighting match: The head lighting direction, color temperature, and shadows',
     '  must match the lighting of the body and scene in Image 1.',
     '● Head size: The head must be the EXACT SAME SIZE as the placeholder/blank head area in Image 1.',
     '  Do NOT make the head larger than the template placeholder — match its scale precisely.',
+    '● Head framing: Do NOT zoom the head to fill the entire mask.',
+    '  Keep the head slightly smaller inside the replacement area so the full crown, forehead, jawline, and chin remain visible.',
+    '● Reference scale lock: Image 2 intentionally contains extra blank padding around the head.',
+    '  Preserve the SAME relative head scale seen in Image 2. Do NOT crop into Image 2, do NOT zoom into the inner face area, and do NOT enlarge the face beyond that reference scale.',
     '',
     genderLock,
+    headNeckRatioLock,
     appearanceLine,
+    ...(Array.isArray(controlProfile.promptLines) ? controlProfile.promptLines : []),
+    ...(Array.isArray(conf.extraPromptLines) ? conf.extraPromptLines : []),
     'Ultra-detailed, 8K resolution, photorealistic, sharp face, seamless composite.',
   ].filter(Boolean).join('\n');
 
   const negative_prompt = [
     'hard edge, visible seam, cutout effect, pasted-on look, halo artifact,',
     'floating head, neck mismatch, skin tone jump, color discontinuity,',
+    'short neck, long neck, thick neck, thin neck, oversized head, undersized head,',
+    'translucent hair, faded crown, blurry hairline, missing hair, bald patch, soft-focus hair,',
+    'cropped face, partial face, missing chin, missing mouth, missing jawline, face hidden by jersey, lower face occluded,',
+    'redrawn jersey, altered collar, changed shoulders, modified hands, distorted flag, broken letters,',
     'blurry face, distorted face, deformed anatomy, wrong proportions,',
     'cartoon, anime, illustration, painting,',
     'identity drift, different person, wrong hairstyle, beauty filter, age altered,',
     'changed background, altered composition, moved objects, different lighting.',
+    ...(Array.isArray(controlProfile.negativeTerms) ? controlProfile.negativeTerms : []),
+    ...(Array.isArray(conf.extraNegativeTerms) ? conf.extraNegativeTerms : []),
   ].join(' ');
 
   const t0 = Date.now();
@@ -531,18 +915,21 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
     }
 
     const meta = await sharp(templatePath).metadata();
+    const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
+      ? await toScaledReferenceDataUrl(photoPath, conf.refScale, conf.refAnchor || 'center')
+      : userBase64;
 
     let r;
     if (conf.mode === 'inpaint') {
       r = await runInpaintTest({
         photoTag, sceneId, conf,
         templatePath, templateW: meta.width, templateH: meta.height,
-        userBase64, userDescription, gender, outputDir,
+        userBase64: sceneUserBase64, userDescription, gender, outputDir,
       });
     } else {
       r = await runFaceswapTest({
         photoTag, sceneId, conf, templatePath,
-        userBase64, userDescription, gender, outputDir,
+        userBase64: sceneUserBase64, userDescription, gender, outputDir,
       });
     }
     results.push(r);

@@ -11,6 +11,7 @@
 
 ## 目录结构
 
+- [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md)
 - [scene1/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene1\README.md)
 - [scene2/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene2\README.md)
 - [scene3/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene3\README.md)
@@ -38,6 +39,10 @@
 当前已经明确恢复并提交的版本是 `scene2` 的“旧版批量 inpaint 工流”，见：
 
 - [scene2/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene2\README.md)
+
+当前正在使用和继续调参的批量流程快照见：
+
+- [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md)
 
 其中对应的已提交 commit：
 

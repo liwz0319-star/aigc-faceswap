@@ -62,3 +62,31 @@ node .\test-faceswap-scene3-inpaint.js "生成测试\照片\xxx.jpg" --gender fe
 
 - 运行回滚: 直接重新跑该脚本。
 - 代码回滚: 恢复 `test-faceswap-scene3-inpaint.js`。
+
+## 版本 4: 新底图批量 inpaint 初始接入版
+
+- 脚本: [test-faceswap-inpaint-scenes.js](F:\AAA Work\AIproject\demo\球星球迷合照\test-faceswap-inpaint-scenes.js)
+- 场景入口: `SCENE_CONFIGS['3']`
+- 底图: `素材/新场景底图/场景3.png`
+- 核心方式: 新底图单人模板，走 `split-mask inpaint + post-composite`
+- 输出尺寸: `2560x1536`
+- 当前 split-mask:
+  - male: `cx=1050, cy=314, w=214, h=286`
+  - male API: `apiCx=1050, apiCy=296, apiW=182, apiH=268`
+  - male composite: `compCx=1050, compCy=320, compW=222, compH=292, compSolidTopH=92`
+  - female: `cx=1050, cy=314, w=202, h=274`
+  - female API: `apiCx=1050, apiCy=296, apiW=170, apiH=256`
+  - female composite: `compCx=1050, compCy=320, compW=210, compH=280, compSolidTopH=88`
+- 主要输出目录: 默认 `生成测试/inpaint_output`
+
+使用说明:
+
+```powershell
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 3
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 3 --gender female --outdir "生成测试\scene3_check"
+```
+
+回滚说明:
+
+- 运行回滚: 直接指定 `--scene 3` 复跑当前版本。
+- 代码回滚: 如果后续继续调坏，优先恢复 [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md) 对应提交里的 `test-faceswap-inpaint-scenes.js`。
