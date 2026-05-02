@@ -79,12 +79,15 @@ const INPAINT_CONTROL_PROFILES = {
       '● Skin transition: Keep the face skin tone close to the neck and body skin tone in Image 1, with a natural transition from jaw to neck.',
       '● Center lock: Keep the nose centered on the placeholder neck axis. Do NOT slide the face left or right.',
       '● Background lock: The blue locker background must stay identical to Image 1 and the head edge must blend softly into it.',
+      '● Head size lock: Match the original player head size in Image 1. Do NOT make the head oversized relative to the shoulders or torso.',
+      '● Realism lock: The face must remain a real photographic human face. No cartoon, no CGI, no doll-like stylization, and no oversized eyes.',
     ],
     negativeTerms: [
       'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
       'blank mannequin face', 'featureless head', 'blue mannequin skin', 'unfinished head',
       'half face', 'side-clipped face', 'cropped forehead', 'cropped chin', 'off-center face',
       'dark head hole', 'black face void', 'featureless dark head',
+      'cartoon face', 'anime face', 'cgi face', '3d render face', 'doll face', 'toy face', 'oversized eyes', 'plastic skin',
     ],
   },
   scene4_festival: {
@@ -97,12 +100,16 @@ const INPAINT_CONTROL_PROFILES = {
       '● Placeholder coverage: Fully cover the blank placeholder head from ear to ear. Do NOT leave any visible placeholder edge on the left or right side.',
       '● Single-head rule: Generate exactly one aligned head centered on the placeholder neck. Do NOT create a second face beside the placeholder.',
       '● Background blend: Preserve the original sky and tree colors from Image 1 and blend the head edge naturally into the background.',
+      '● Head size lock: Match the original footballer head size in Image 1. The inserted head must stay proportional to the shoulders and torso.',
+      '● Realism lock: The face must remain a real photographic human face. No cartoon, no CGI, no doll-like stylization, and no oversized eyes.',
     ],
     negativeTerms: [
       'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
       'dark halo around hair', 'black fringe around hairline', 'muddy hair edge',
       'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
       'oversized head', 'giant head', 'tiny body large head',
+      'rectangular crop edge', 'visible box edge', 'background patch edge',
+      'cartoon face', 'anime face', 'cgi face', '3d render face', 'doll face', 'toy face', 'oversized eyes', 'plastic skin',
     ],
   },
 };
@@ -130,48 +137,52 @@ const SCENE_CONFIGS = {
       file: '场景1男.jpg', label: '场景1男（更衣室）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
       controlProfile: 'scene1_portrait',
-      refScale: 0.48, refAnchor: 'north', refOffsetY: 0.16,
+      refScale: 0.39, refAnchor: 'north', refOffsetY: 0.16,
       extraPromptLines: [
         '● Head swap framing: Replace the whole mannequin head area, including crown, forehead, cheeks, mouth, jawline, and chin.',
         '● Neck blend: Keep a natural transition from the lower jaw into the neck opening above the jersey collar.',
+        '● Size reference: Keep the final head close to the original player head size, not larger.',
       ],
       extraNegativeTerms: [
         'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
         'half face', 'side-clipped face', 'cropped forehead', 'cropped chin',
         'dark head hole', 'black face void',
+        'cartoon face', 'anime face', 'cgi face', 'doll face', 'oversized eyes',
       ],
       // Scene 1 uses a rectangular head-swap window to give the model more room than
       // a tight ellipse while still locking jersey/body pixels in post-composite.
       mask: {
-        cx: 1140, cy: 844, w: 188, h: 304,
-        apiCx: 1140, apiCy: 842, apiW: 176, apiH: 286,
-        compCx: 1140, compCy: 846, compW: 214, compH: 332,
-        compSolidTopH: 138,
+        cx: 1140, cy: 844, w: 168, h: 276,
+        apiCx: 1140, apiCy: 842, apiW: 154, apiH: 252,
+        compCx: 1140, compCy: 846, compW: 194, compH: 304,
+        compSolidTopH: 112,
         compSolidTopInset: 18,
-        compFeather: 16,
+        compFeather: 18,
       },
     },
     female: {
       file: '场景1女.jpg', label: '场景1女（更衣室）',
       mode: 'inpaint', size: '2048x2560', guidance: 10,
       controlProfile: 'scene1_portrait',
-      refScale: 0.46, refAnchor: 'north', refOffsetY: 0.16,
+      refScale: 0.37, refAnchor: 'north', refOffsetY: 0.16,
       extraPromptLines: [
         '● Head swap framing: Replace the whole mannequin head area, including crown, forehead, cheeks, mouth, jawline, and chin.',
         '● Neck blend: Keep a natural transition from the lower jaw into the neck opening above the jersey collar.',
+        '● Size reference: Keep the final head close to the original player head size, not larger.',
       ],
       extraNegativeTerms: [
         'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
         'half face', 'side-clipped face', 'cropped forehead', 'cropped chin',
         'dark head hole', 'black face void',
+        'cartoon face', 'anime face', 'cgi face', 'doll face', 'oversized eyes',
       ],
       mask: {
-        cx: 1140, cy: 846, w: 184, h: 310,
-        apiCx: 1140, apiCy: 844, apiW: 172, apiH: 292,
-        compCx: 1140, compCy: 848, compW: 210, compH: 338,
-        compSolidTopH: 142,
+        cx: 1140, cy: 846, w: 164, h: 282,
+        apiCx: 1140, apiCy: 844, apiW: 150, apiH: 258,
+        compCx: 1140, compCy: 848, compW: 190, compH: 310,
+        compSolidTopH: 116,
         compSolidTopInset: 18,
-        compFeather: 16,
+        compFeather: 18,
       },
     },
   },
@@ -248,32 +259,34 @@ const SCENE_CONFIGS = {
       file: '场景4男.png', label: '场景4男（啤酒节，替换最左）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
       controlProfile: 'scene4_festival',
-      refScale: 0.72, refAnchor: 'north', refOffsetY: 0.08,
+      refScale: 0.68, refAnchor: 'north', refOffsetY: 0.08,
       extraPromptLines: [
         '● Placeholder coverage: Completely replace the left placeholder head, including the left rim and right rim of the blank head.',
         '● Single-head rule: Keep only one face aligned to the placeholder neck. No adjacent second face and no leftover mannequin silhouette.',
         '● Head size lock: Keep the inserted head modest and proportional to the shoulders and torso. Do NOT enlarge the head to fill the whole mask.',
+        '● Keep head small enough to match the original player head size in the group photo.',
       ],
       extraNegativeTerms: [
         'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
         'oversized head', 'giant head', 'big face small body',
+        'rectangular crop edge', 'visible box edge', 'background patch edge',
       ],
       // Scene 4 switches to a rectangular head-swap window to better cover the
       // placeholder while keeping a smaller, more proportional generated head.
       mask: {
-        cx: 72, cy: 126, w: 64, h: 96,
-        apiCx: 71, apiCy: 126, apiW: 60, apiH: 92,
-        compCx: 71, compCy: 126, compW: 74, compH: 114,
-        compSolidTopH: 44,
+        cx: 72, cy: 126, w: 60, h: 90,
+        apiCx: 71, apiCy: 126, apiW: 58, apiH: 88,
+        compCx: 71, compCy: 126, compW: 68, compH: 104,
+        compSolidTopH: 12,
         compSolidTopInset: 8,
-        compFeather: 8,
+        compFeather: 10,
       },
     },
     female: {
       file: '场景4女.png', label: '场景4女（啤酒节，替换最左）',
       mode: 'inpaint', size: '2560x1536', guidance: 10,
       controlProfile: 'scene4_festival',
-      refScale: 0.74, refAnchor: 'north', refOffsetY: 0.08,
+      refScale: 0.60, refAnchor: 'north', refOffsetY: 0.08,
       extraPromptLines: [
         '● Jaw completion: The full lower face must be fully generated, including nose base, lips, chin, jawline, and the front of the neck.',
         '● No mannequin carry-over: Do NOT leave any mannequin skin, blank mannequin texture, or melted placeholder surface under the mouth or around the chin.',
@@ -281,25 +294,58 @@ const SCENE_CONFIGS = {
         '● Placeholder coverage: Completely replace the left placeholder head, including the left rim and right rim of the blank head.',
         '● Single-head rule: Keep only one face aligned to the placeholder neck. No adjacent second face and no leftover mannequin silhouette.',
         '● Head size lock: Keep the inserted head modest and proportional to the shoulders and torso. Do NOT enlarge the head to fill the whole mask.',
+        '● Keep the female head the same size as the original player head in Image 1, not larger.',
       ],
       extraNegativeTerms: [
         'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
         'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
         'oversized head', 'giant head', 'big face small body',
+        'rectangular crop edge', 'visible box edge', 'background patch edge',
       ],
       mask: {
-        cx: 82, cy: 96, w: 70, h: 112,
-        apiCx: 81, apiCy: 98, apiW: 64, apiH: 104,
-        compCx: 81, compCy: 100, compW: 82, compH: 128,
-        compSolidTopH: 50,
+        cx: 82, cy: 96, w: 58, h: 94,
+        apiCx: 81, apiCy: 98, apiW: 56, apiH: 92,
+        compCx: 81, compCy: 100, compW: 72, compH: 112,
+        compSolidTopH: 12,
         compSolidTopInset: 8,
-        compFeather: 8,
+        compFeather: 10,
       },
     },
   },
 };
 
 // ── 工具函数 ──────────────────────────────────────────────────
+Object.assign(SCENE_CONFIGS['3'].female, {
+  refScale: 0.39,
+  extraPromptLines: [
+    'Full crown visibility: Keep the entire top hair, crown, and upper hair volume fully visible above the forehead.',
+    'Hair solidity: Hair at the top of the head must be dense, opaque, and well-defined. No translucent top hair and no faded crown.',
+    'Female head scale: Keep the female head slightly smaller inside the placeholder so the full hair silhouette, temples, cheeks, jawline, and chin fit naturally.',
+    'Jersey clearance: Keep the chin and jawline clearly separated above the top edge of the jersey.',
+    'Long-hair routing: If the person in Image 2 has medium or long hair, let the side hair fall naturally behind the shoulders and upper back of Image 1.',
+    'Do NOT drape long hair across the front of the jersey or over the center chest area.',
+    'Shoulder clearance: Keep the front neckline and upper chest of the jersey clean and unobstructed. Any longer side hair should stay near the outer shoulder line or behind it.',
+  ],
+  extraNegativeTerms: [
+    'oversized female head', 'faded crown', 'translucent top hair', 'missing top hair', 'cropped crown',
+    'long hair over front jersey', 'hair across chest', 'hair covering shirt collar', 'front-draped hair curtain',
+  ],
+});
+
+Object.assign(SCENE_CONFIGS['3'].female, {
+  refScale: 0.39,
+  extraPromptLines: [
+    ...SCENE_CONFIGS['3'].female.extraPromptLines,
+    'Long-hair routing: If the person in Image 2 has medium or long hair, let the side hair fall naturally behind the shoulders and upper back of Image 1.',
+    'Do NOT drape long hair across the front of the jersey or over the center chest area.',
+    'Shoulder clearance: Keep the front neckline and upper chest of the jersey clean and unobstructed. Any longer side hair should stay near the outer shoulder line or behind it.',
+  ],
+  extraNegativeTerms: [
+    ...SCENE_CONFIGS['3'].female.extraNegativeTerms,
+    'long hair over front jersey', 'hair across chest', 'hair covering shirt collar', 'front-draped hair curtain',
+  ],
+});
+
 function toBase64DataUrl(filePath) {
   const p   = filePath.replace(/\\/g, '/');
   const buf = fs.readFileSync(p);
