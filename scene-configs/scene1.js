@@ -6,8 +6,10 @@ module.exports = {
     refScale: 0.36, refAnchor: 'north', refOffsetY: 0.14,
     extraPromptLines: [
       'Head swap framing: Replace the whole mannequin head area, including crown, forehead, cheeks, mouth, jawline, and chin.',
+      'Replacement coverage: The rectangular head-swap region must fully cover the entire user head content that needs replacement, not just the center face area.',
       'Neck blend: Keep a natural transition from the lower jaw into the neck opening above the jersey collar.',
       'Size reference: Keep the final head close to the original player head size, not larger.',
+      'Background consistency: Keep the locker background color unchanged and blend the outer head edge softly into the original background.',
     ],
     extraNegativeTerms: [
       'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
@@ -17,9 +19,9 @@ module.exports = {
     ],
     mask: {
       cx: 1140, cy: 844, w: 168, h: 276,
-      apiCx: 1142, apiCy: 844, apiW: 164, apiH: 264,
-      compCx: 1142, compCy: 846, compW: 180, compH: 284,
-      compSolidTopH: 104,
+      apiCx: 1142, apiCy: 840, apiW: 176, apiH: 286,
+      compCx: 1142, compCy: 844, compW: 194, compH: 308,
+      compSolidTopH: 112,
       compSolidTopInset: 16,
       compFeather: 10,
     },
@@ -31,8 +33,10 @@ module.exports = {
     refScale: 0.34, refAnchor: 'north', refOffsetY: 0.14,
     extraPromptLines: [
       'Head swap framing: Replace the whole mannequin head area, including crown, forehead, cheeks, mouth, jawline, and chin.',
+      'Replacement coverage: The rectangular head-swap region must fully cover the entire user head content that needs replacement, not just the center face area.',
       'Neck blend: Keep a natural transition from the lower jaw into the neck opening above the jersey collar.',
       'Size reference: Keep the final head close to the original player head size, not larger.',
+      'Background consistency: Keep the locker background color unchanged and blend the outer head edge softly into the original background.',
     ],
     extraNegativeTerms: [
       'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
@@ -42,9 +46,9 @@ module.exports = {
     ],
     mask: {
       cx: 1140, cy: 846, w: 164, h: 282,
-      apiCx: 1142, apiCy: 846, apiW: 162, apiH: 270,
-      compCx: 1142, compCy: 848, compW: 178, compH: 292,
-      compSolidTopH: 108,
+      apiCx: 1142, apiCy: 840, apiW: 174, apiH: 292,
+      compCx: 1142, compCy: 844, compW: 192, compH: 314,
+      compSolidTopH: 116,
       compSolidTopInset: 16,
       compFeather: 10,
     },
