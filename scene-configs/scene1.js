@@ -25,9 +25,9 @@ module.exports = {
     ],
     mask: {
       cx: 1140, cy: 844, w: 168, h: 276,
-      apiCx: 1240, apiCy: 948, apiW: 356, apiH: 320,
-      compCx: 1240, compCy: 951, compW: 382, compH: 344,
-      compSolidTopH: 116,
+      apiCx: 1143, apiCy: 848, apiW: 180, apiH: 306,
+      compCx: 1143, compCy: 850, compW: 198, compH: 324,
+      compSolidTopH: 112,
       compSolidTopInset: 16,
       compFeather: 8,
     },
