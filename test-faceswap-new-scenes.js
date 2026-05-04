@@ -22,6 +22,7 @@ if (!process.env.VISION_API_KEY && process.env.SEEDREAM_NATIVE_API_KEY) {
 require('module').Module.globalPaths.push(path.join(SERVER_DIR, 'node_modules'));
 
 const axios = require(path.join(SERVER_DIR, 'node_modules', 'axios'));
+const sharp = require(path.join(SERVER_DIR, 'node_modules', 'sharp'));
 const { generateNativeImage }    = require('./server/src/seedreamNativeClient');
 const { buildFaceswapPrompt }    = require('./server/src/promptBuilder_faceswap');
 const { describeUserAppearance } = require('./server/src/visionClient');
@@ -64,6 +65,8 @@ const SCENE_CONFIGS = {
     male: {
       file: '场景4男.png', targetPerson: 'the person on the far left',
       templateType: 'faceswap', size: '2560x1536', strength: 0.45, guidance: 10,
+      refScale: 0.46,
+      refCrop: { width: 0.74, height: 0.60, offsetX: 0.5, offsetY: 0.02 },
       label: '场景4男（啤酒节，替换最左侧）',
     },
   },
@@ -79,6 +82,58 @@ function toBase64DataUrl(filePath) {
   const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg'
              : ext === 'png' ? 'image/png' : `image/${ext}`;
   return `data:${mime};base64,${buf.toString('base64')}`;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+async function toHeadReferenceDataUrl(filePath, scale = 1, crop = null) {
+  if ((!scale || scale >= 0.999) && !crop) return toBase64DataUrl(filePath);
+
+  const p = filePath.replace(/\\/g, '/');
+  const ext = path.extname(p).slice(1).toLowerCase();
+  const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg'
+             : ext === 'png' ? 'image/png' : `image/${ext}`;
+  const input = fs.readFileSync(p);
+  const meta = await sharp(input).metadata();
+  const canvasW = meta.width || 1024;
+  const canvasH = meta.height || 1024;
+
+  let subject = input;
+  if (crop) {
+    const cropW = Math.max(1, Math.min(canvasW, Math.round(canvasW * clamp(crop.width ?? 1, 0.1, 1))));
+    const cropH = Math.max(1, Math.min(canvasH, Math.round(canvasH * clamp(crop.height ?? 1, 0.1, 1))));
+    const left = Math.round(clamp((canvasW - cropW) * (crop.offsetX ?? 0.5), 0, Math.max(0, canvasW - cropW)));
+    const top = Math.round(clamp((canvasH - cropH) * (crop.offsetY ?? 0), 0, Math.max(0, canvasH - cropH)));
+    subject = await sharp(input).extract({ left, top, width: cropW, height: cropH }).toBuffer();
+  }
+
+  const resolvedScale = (!scale || scale >= 0.999) ? 1 : scale;
+  const boxW = Math.max(1, Math.round(canvasW * resolvedScale));
+  const boxH = Math.max(1, Math.round(canvasH * resolvedScale));
+  const scaled = await sharp(subject)
+    .resize(boxW, boxH, { fit: 'inside' })
+    .toBuffer();
+  const scaledMeta = await sharp(scaled).metadata();
+  const innerW = scaledMeta.width || boxW;
+  const innerH = scaledMeta.height || boxH;
+  const left = Math.round((canvasW - innerW) * 0.5);
+  const top = Math.round((canvasH - innerH) * 0.08);
+
+  const out = await sharp({
+    create: {
+      width: canvasW,
+      height: canvasH,
+      channels: 3,
+      background: { r: 255, g: 255, b: 255 },
+    },
+  })
+    .composite([{ input: scaled, left, top }])
+    .jpeg({ quality: 95 })
+    .toBuffer();
+
+  return `data:${mime};base64,${out.toString('base64')}`;
 }
 
 function downloadFile(url, dest) {
@@ -142,6 +197,9 @@ async function runOneTest({ photoPath, photoTag, sceneId, gender, userBase64, us
   }
 
   const templateBase64 = toBase64DataUrl(templatePath);
+  const userRefBase64 = (tplConf.refCrop || (tplConf.refScale && tplConf.refScale < 0.999))
+    ? await toHeadReferenceDataUrl(photoPath, tplConf.refScale ?? 1, tplConf.refCrop)
+    : userBase64;
   const { prompt, negative_prompt } = buildFaceswapPrompt({
     targetPerson:  tplConf.targetPerson,
     userDescription,
@@ -153,7 +211,7 @@ async function runOneTest({ photoPath, photoTag, sceneId, gender, userBase64, us
   try {
     const result = await generateNativeImage({
       prompt, negative_prompt,
-      images: [templateBase64, userBase64],
+      images: [templateBase64, userRefBase64],
       size:   tplConf.size,
       scene_params: { strength: tplConf.strength, guidance_scale: tplConf.guidance },
     });

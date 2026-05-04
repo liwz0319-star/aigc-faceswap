@@ -252,10 +252,10 @@ const SCENE_CONFIGS = {
       mask: {
         cx: 934, cy: 284, w: 194, h: 370,
         apiCx: 934, apiCy: 270, apiW: 168, apiH: 352,
-        compCx: 934, compCy: 278, compW: 196, compH: 370,
-        compSolidTopH: 136,
-        compSolidTopInset: 26,
-        compFeather: 10,
+        compCx: 934, compCy: 280, compW: 204, compH: 382,
+        compSolidTopH: 126,
+        compSolidTopInset: 22,
+        compFeather: 14,
       },
     },
   },
@@ -332,13 +332,11 @@ Object.assign(SCENE_CONFIGS['3'].female, {
     'Do NOT drape long hair across the front of the jersey or over the center chest area.',
     'Shoulder clearance: Keep the front neckline and upper chest of the jersey clean and unobstructed. Any longer side hair should stay near the outer shoulder line or behind it.',
     'Shoulder integrity: Keep the original shoulder line and jersey shoulder seam from Image 1 clean and single. No duplicate shoulder edge, no ghost shoulder, and no second neck or hair shadow on the shoulders.',
-    'Hair-tip clarity: The lower ends of the hair should taper into visible strands with a clean natural edge, not into a foggy or airbrushed blur.',
   ],
   extraNegativeTerms: [
     'oversized female head', 'faded crown', 'translucent top hair', 'missing top hair', 'cropped crown',
     'long hair over front jersey', 'hair across chest', 'hair covering shirt collar', 'front-draped hair curtain',
     'ghost shoulder', 'duplicate shoulder edge', 'double shoulder line', 'bald crown', 'flat top hair',
-    'foggy hair tips', 'airbrushed hair ends', 'hair blur cloud', 'mushy hair edge',
   ],
 });
 }
@@ -354,8 +352,52 @@ function toBase64DataUrl(filePath) {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
-async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center', offsetX = 0.5, offsetY = null) {
-  if (!scale || scale >= 0.999) return toBase64DataUrl(filePath);
+function resolveReferenceCropRect(canvasW, canvasH, crop = null) {
+  if (!crop) return null;
+
+  const cropW = Math.max(1, Math.min(canvasW, Math.round(canvasW * clamp(crop.width ?? 1, 0.1, 1))));
+  const cropH = Math.max(1, Math.min(canvasH, Math.round(canvasH * clamp(crop.height ?? 1, 0.1, 1))));
+  const cropOffsetX = typeof crop.offsetX === 'number' ? crop.offsetX : 0.5;
+  const cropOffsetY = typeof crop.offsetY === 'number'
+    ? crop.offsetY
+    : crop.anchor === 'north'
+    ? 0
+    : 0.5;
+
+  return {
+    left: Math.round(clamp((canvasW - cropW) * cropOffsetX, 0, Math.max(0, canvasW - cropW))),
+    top: Math.round(clamp((canvasH - cropH) * cropOffsetY, 0, Math.max(0, canvasH - cropH))),
+    width: cropW,
+    height: cropH,
+  };
+}
+
+async function buildReferenceSubjectBuffer(input, canvasW, canvasH, scale = 1, crop = null) {
+  const resolvedScale = (!scale || scale >= 0.999) ? 1 : scale;
+  if (!crop && resolvedScale >= 0.999) return input;
+
+  const cropRect = resolveReferenceCropRect(canvasW, canvasH, crop);
+  const subject = cropRect
+    ? await sharp(input).extract(cropRect).toBuffer()
+    : input;
+
+  if (cropRect) {
+    const boxW = Math.max(1, Math.round(canvasW * resolvedScale));
+    const boxH = Math.max(1, Math.round(canvasH * resolvedScale));
+    return sharp(subject)
+      .resize(boxW, boxH, { fit: 'inside' })
+      .toBuffer();
+  }
+
+  const innerW = Math.max(1, Math.round(canvasW * resolvedScale));
+  const innerH = Math.max(1, Math.round(canvasH * resolvedScale));
+  return sharp(subject)
+    .resize(innerW, innerH, { fit: 'fill' })
+    .toBuffer();
+}
+
+async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center', offsetX = 0.5, offsetY = null, crop = null) {
+  if ((!scale || scale >= 0.999) && !crop) return toBase64DataUrl(filePath);
 
   const p = filePath.replace(/\\/g, '/');
   const ext = path.extname(p).slice(1).toLowerCase();
@@ -365,12 +407,10 @@ async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center', 
   const meta = await sharp(input).metadata();
   const canvasW = meta.width || 1024;
   const canvasH = meta.height || 1024;
-  const innerW = Math.max(1, Math.round(canvasW * scale));
-  const innerH = Math.max(1, Math.round(canvasH * scale));
-
-  const scaled = await sharp(input)
-    .resize(innerW, innerH, { fit: 'fill' })
-    .toBuffer();
+  const scaled = await buildReferenceSubjectBuffer(input, canvasW, canvasH, scale, crop);
+  const scaledMeta = await sharp(scaled).metadata();
+  const innerW = scaledMeta.width || canvasW;
+  const innerH = scaledMeta.height || canvasH;
 
   const remainingW = Math.max(0, canvasW - innerW);
   const remainingH = Math.max(0, canvasH - innerH);
@@ -396,6 +436,129 @@ async function toScaledReferenceDataUrl(filePath, scale = 1, anchor = 'center', 
     .toBuffer();
 
   return `data:${mime};base64,${out.toString('base64')}`;
+}
+
+async function hasFlatLightBorder(filePath) {
+  const p = filePath.replace(/\\/g, '/');
+  const input = fs.readFileSync(p);
+  const { data, info } = await sharp(input)
+    .resize(96, 96, { fit: 'fill' })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const width = info.width || 96;
+  const height = info.height || 96;
+  const border = Math.max(6, Math.round(Math.min(width, height) * 0.12));
+  let count = 0;
+  let sum = 0;
+  let sumSq = 0;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const isBorder = x < border || x >= width - border || y < border || y >= height - border;
+      if (!isBorder) continue;
+      const idx = (y * width + x) * 3;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const lum = (r + g + b) / 3;
+      sum += lum;
+      sumSq += lum * lum;
+      count++;
+    }
+  }
+
+  if (!count) return false;
+  const mean = sum / count;
+  const variance = Math.max(0, sumSq / count - mean * mean);
+  const stdev = Math.sqrt(variance);
+  return mean >= 220 && stdev <= 18;
+}
+
+async function toSoftOvalReferenceDataUrl(filePath, scale = 1, anchor = 'center', offsetX = 0.5, offsetY = null, crop = null) {
+  const p = filePath.replace(/\\/g, '/');
+  const ext = path.extname(p).slice(1).toLowerCase();
+  const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg'
+             : ext === 'png' ? 'image/png' : `image/${ext}`;
+  const input = fs.readFileSync(p);
+  const meta = await sharp(input).metadata();
+  const canvasW = meta.width || 1024;
+  const canvasH = meta.height || 1024;
+  const scaled = await buildReferenceSubjectBuffer(input, canvasW, canvasH, scale, crop);
+  const scaledMeta = await sharp(scaled).metadata();
+  const innerW = scaledMeta.width || canvasW;
+  const innerH = scaledMeta.height || canvasH;
+  const scaledWithAlpha = await sharp(scaled)
+    .ensureAlpha()
+    .toBuffer();
+
+  const remainingW = Math.max(0, canvasW - innerW);
+  const remainingH = Math.max(0, canvasH - innerH);
+  const resolvedOffsetX = typeof offsetX === 'number' ? offsetX : 0.5;
+  const resolvedOffsetY = typeof offsetY === 'number'
+    ? offsetY
+    : anchor === 'north'
+    ? 0.12
+    : 0.5;
+  const left = Math.round(clamp(remainingW * resolvedOffsetX, 0, remainingW));
+  const top = Math.round(clamp(remainingH * resolvedOffsetY, 0, remainingH));
+
+  const rx = Math.max(1, Math.round(innerW * 0.42));
+  const ry = Math.max(1, Math.round(innerH * 0.46));
+  const cy = Math.round(innerH * 0.46);
+  const feather = Math.max(10, Math.round(Math.min(innerW, innerH) * 0.035));
+  const ovalSvg = `<svg width="${innerW}" height="${innerH}">` +
+    `<ellipse cx="${Math.round(innerW / 2)}" cy="${cy}" rx="${rx}" ry="${ry}" fill="white"/>` +
+    `</svg>`;
+  const ovalMask = await sharp({
+    create: {
+      width: innerW,
+      height: innerH,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([{ input: Buffer.from(ovalSvg), blend: 'over' }])
+    .blur(feather)
+    .png()
+    .toBuffer();
+
+  const softened = await sharp(scaledWithAlpha)
+    .composite([{ input: ovalMask, blend: 'dest-in' }])
+    .png()
+    .toBuffer();
+
+  const out = await sharp({
+    create: {
+      width: canvasW,
+      height: canvasH,
+      channels: 3,
+      background: { r: 255, g: 255, b: 255 },
+    },
+  })
+    .composite([{ input: softened, left, top }])
+    .jpeg({ quality: 95 })
+    .toBuffer();
+
+  return `data:${mime};base64,${out.toString('base64')}`;
+}
+
+function normalizeReferenceCropEntries(conf) {
+  if (Array.isArray(conf.refCropCandidates) && conf.refCropCandidates.length > 0) {
+    return conf.refCropCandidates.map(entry => {
+      if (!entry || !entry.crop) return { label: 'full', crop: null };
+      return { label: entry.label || 'crop', crop: entry.crop };
+    });
+  }
+  return [{ label: conf.refCrop ? 'crop' : 'full', crop: conf.refCrop || null }];
+}
+
+function formatReferenceVariantLabel(baseLabel, cropLabel, softOval) {
+  const parts = [baseLabel];
+  if (cropLabel && cropLabel !== 'full') parts.push(cropLabel);
+  if (softOval) parts.push('soft-oval');
+  return parts.join('+');
 }
 
 function downloadFile(url, dest) {
@@ -461,6 +624,104 @@ async function detectGender(userBase64) {
     if (answer.includes('male'))   return 'male';
   } catch (e) { /* 失败默认男性 */ }
   return 'male';
+}
+
+async function validateHeadSwapResult(resultBase64, sceneLabel, targetPerson = 'the main swapped person', extraRule = '') {
+  const key = process.env.VISION_API_KEY;
+  if (!key) return { ok: true, skipped: true, reason: 'no_vision_key' };
+
+  const url = process.env.VISION_API_URL || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+  try {
+    const res = await axios.post(url, {
+      model: process.env.VISION_MODEL || 'doubao-1-5-vision-pro-32k-250115',
+      messages: [{ role: 'user', content: [
+        { type: 'image_url', image_url: { url: resultBase64 } },
+        {
+          type: 'text',
+          text:
+            `Validate this head-swap result for ${sceneLabel}. ` +
+            `Look only at ${targetPerson}. ` +
+            'Reply ONLY PASS if there is exactly one complete, realistic, visible human head and face attached naturally to the existing scene body, and only the head, hair, ears, and neck area were replaced. ' +
+            'Reply ONLY FAIL if the head is missing, blank, replaced by a dark block, mannequin patch, or if source-photo clothing, chest, shoulders, arms, hands, or source background were copied into the scene. ' +
+            extraRule
+        },
+      ]}],
+      max_tokens: 4,
+      temperature: 0,
+    }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, timeout: 20000 });
+
+    const answer = (res.data?.choices?.[0]?.message?.content || '').trim().toUpperCase();
+    if (answer.includes('FAIL')) return { ok: false, reason: answer || 'FAIL' };
+    if (answer.includes('PASS')) return { ok: true, reason: answer };
+    return { ok: true, skipped: true, reason: `unparsed:${answer}` };
+  } catch (e) {
+    console.warn(`  [validator] 跳过结果校验: ${e.message}`);
+    return { ok: true, skipped: true, reason: e.message };
+  }
+}
+
+async function buildReferenceVariants(photoPath, conf, originalUserBase64) {
+  const candidates = Array.isArray(conf.refScaleCandidates) && conf.refScaleCandidates.length > 0
+    ? conf.refScaleCandidates
+    : [conf.refScale ?? 1];
+  const cropEntries = normalizeReferenceCropEntries(conf);
+  const useSoftOval = Boolean(conf.refSoftOvalOnFlatBackground);
+  const alwaysSoftOval = Boolean(conf.refAlwaysSoftOval);
+  const hasLightFlatBorder = useSoftOval && !alwaysSoftOval ? await hasFlatLightBorder(photoPath) : false;
+
+  const variants = [];
+  const seen = new Set();
+  for (const cropEntry of cropEntries) {
+    for (const rawScale of candidates) {
+      const scale = (!rawScale || rawScale >= 0.999) ? 1 : Number(rawScale);
+      const key = scale >= 0.999 ? '1.000' : scale.toFixed(3);
+      const cropKey = JSON.stringify(cropEntry.crop || null);
+      const baseLabel = scale >= 0.999 ? 'original' : `scale=${key}`;
+      if (alwaysSoftOval || hasLightFlatBorder) {
+        const softKey = `${key}:${cropKey}:soft`;
+        if (!seen.has(softKey)) {
+          seen.add(softKey);
+          variants.push({
+            label: formatReferenceVariantLabel(baseLabel, cropEntry.label, true),
+            scale,
+            base64: await toSoftOvalReferenceDataUrl(
+              photoPath,
+              scale,
+              conf.refAnchor || 'center',
+              conf.refOffsetX ?? 0.5,
+              conf.refOffsetY,
+              cropEntry.crop
+            ),
+          });
+        }
+      }
+
+      const plainKey = `${key}:${cropKey}:plain`;
+      if (seen.has(plainKey)) continue;
+      seen.add(plainKey);
+
+      variants.push({
+        label: formatReferenceVariantLabel(baseLabel, cropEntry.label, false),
+        scale,
+        base64: scale >= 0.999 && !cropEntry.crop
+          ? originalUserBase64
+          : await toScaledReferenceDataUrl(
+              photoPath,
+              scale,
+              conf.refAnchor || 'center',
+              conf.refOffsetX ?? 0.5,
+              conf.refOffsetY,
+              cropEntry.crop
+            ),
+      });
+    }
+  }
+
+  if (conf.includeOriginalReferenceFallback && !seen.has('1.000:null:plain')) {
+    variants.push({ label: 'original', scale: 1, base64: originalUserBase64 });
+  }
+
+  return variants;
 }
 
 /**
@@ -797,7 +1058,7 @@ async function postComposite({ templatePath, templateW, templateH, aiBuf, maskCo
 //   2. Post-composite：把原始底图（精确缩放到输出尺寸）在 mask 椭圆外强制覆盖回去
 //      → 椭圆内 = AI 生成的人脸，椭圆外 = 原始底图像素，100% 锁定背景
 async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW, templateH,
-                                 userBase64, userDescription, gender, outputDir = OUTPUT_DIR }) {
+                                 userBase64, userDescription, gender, outputDir = OUTPUT_DIR, attemptLabel = null }) {
   const [outW, outH] = conf.size.split('x').map(Number);
   const templateBase64 = toBase64DataUrl(templatePath);
   const controlProfile = INPAINT_CONTROL_PROFILES[conf.controlProfile] || INPAINT_CONTROL_PROFILES.default;
@@ -824,7 +1085,9 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
   // 换头提示词：强调自然融合、肤色衔接、颈部过渡、背景不变
   const prompt = [
     'Photorealistic head transplant composite. Ultra-high quality.',
-    'Image 1 = scene background with a placeholder body. Image 2 = the real person to place into the scene.',
+    'Image 1 = scene background with a placeholder body. Image 2 = a head-and-hair identity reference of the real person.',
+    'Use Image 2 only for facial identity, hairstyle, ears, skin tone, and natural neck transition.',
+    'Do NOT copy Image 2 clothing, chest, shoulders, hands, pose, or source background into the result.',
     controlProfile.taskLine,
     '',
     'CRITICAL REQUIREMENTS:',
@@ -854,8 +1117,8 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
     '  Do NOT make the head larger than the template placeholder — match its scale precisely.',
     '● Head framing: Do NOT zoom the head to fill the entire mask.',
     '  Keep the head slightly smaller inside the replacement area so the full crown, forehead, jawline, and chin remain visible.',
-    '● Reference scale lock: Image 2 intentionally contains extra blank padding around the head.',
-    '  Preserve the SAME relative head scale seen in Image 2. Do NOT crop into Image 2, do NOT zoom into the inner face area, and do NOT enlarge the face beyond that reference scale.',
+    'Reference role lock: Treat Image 2 as identity-only head reference, not as a full-body composition reference.',
+    'Ignore any clothing, chest, shoulders, arms, hands, pose, and background from Image 2. Keep those from Image 1.',
     '',
     genderLock,
     headNeckRatioLock,
@@ -872,6 +1135,8 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
     'translucent hair, faded crown, blurry hairline, missing hair, bald patch, soft-focus hair,',
     'cropped face, partial face, missing chin, missing mouth, missing jawline, face hidden by jersey, lower face occluded,',
     'redrawn jersey, altered collar, changed shoulders, modified hands, distorted flag, broken letters,',
+    'source photo jacket, source photo shirt, source photo dress, source photo torso, source photo chest, source photo arms, source photo hands,',
+    'source photo pose, source photo background, room corner patch, wall patch, indoor background patch,',
     'blurry face, distorted face, deformed anatomy, wrong proportions,',
     'cartoon, anime, illustration, painting,',
     'identity drift, different person, wrong hairstyle, beauty filter, age altered,',
@@ -927,6 +1192,28 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
       .composite([{ input: aiFaceMasked, blend: 'over' }])
       .jpeg({ quality: 95 })
       .toBuffer();
+
+    if (conf.validateHeadSwap) {
+      const validation = await validateHeadSwapResult(
+        `data:image/jpeg;base64,${finalBuf.toString('base64')}`,
+        conf.label,
+        conf.validationTarget,
+        conf.validationRule || ''
+      );
+      if (!validation.ok) {
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        console.warn(`  [retry] 场景${sceneId} ${conf.label}${attemptLabel ? ` (${attemptLabel})` : ''} 命中空头/缺头校验: ${validation.reason}`);
+        return {
+          photoTag,
+          sceneId,
+          label: conf.label,
+          elapsed,
+          status: 'failed',
+          error: `validation_failed:${validation.reason}`,
+          retryable: true,
+        };
+      }
+    }
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     const gTag    = gender === 'female' ? 'F' : 'M';
@@ -1012,24 +1299,32 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
     }
 
     const meta = await sharp(templatePath).metadata();
-    const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
-      ? await toScaledReferenceDataUrl(
-          photoPath,
-          conf.refScale,
-          conf.refAnchor || 'center',
-          conf.refOffsetX ?? 0.5,
-          conf.refOffsetY
-        )
-      : userBase64;
 
     let r;
     if (conf.mode === 'inpaint') {
-      r = await runInpaintTest({
-        photoTag, sceneId, conf,
-        templatePath, templateW: meta.width, templateH: meta.height,
-        userBase64: sceneUserBase64, userDescription, gender, outputDir,
-      });
+      const referenceVariants = await buildReferenceVariants(photoPath, conf, userBase64);
+      for (let idx = 0; idx < referenceVariants.length; idx++) {
+        const refVariant = referenceVariants[idx];
+        r = await runInpaintTest({
+          photoTag, sceneId, conf,
+          templatePath, templateW: meta.width, templateH: meta.height,
+          userBase64: refVariant.base64, userDescription, gender, outputDir,
+          attemptLabel: refVariant.label,
+        });
+        if (r.status === 'ok') break;
+        if (!(r.retryable && idx < referenceVariants.length - 1)) break;
+        console.warn(`  [retry] 场景${sceneId} ${conf.label} 切换参考图重试 -> ${referenceVariants[idx + 1].label}`);
+      }
     } else {
+      const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
+        ? await toScaledReferenceDataUrl(
+            photoPath,
+            conf.refScale,
+            conf.refAnchor || 'center',
+            conf.refOffsetX ?? 0.5,
+            conf.refOffsetY
+          )
+        : userBase64;
       r = await runFaceswapTest({
         photoTag, sceneId, conf, templatePath,
         userBase64: sceneUserBase64, userDescription, gender, outputDir,
