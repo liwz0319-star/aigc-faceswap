@@ -335,7 +335,7 @@ async function main() {
       mode: 'faceswap',
       scene: 'scene_01',
       gender: gender,
-      gender_label: genderLabel,
+      gender_label: gender,
       user_photo: path.basename(userPhotoPath),
       template_file: tpl.file,
       target_person: tpl.targetPerson,

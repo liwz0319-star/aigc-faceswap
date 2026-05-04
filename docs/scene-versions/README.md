@@ -12,6 +12,7 @@
 ## 目录结构
 
 - [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md)
+- [current-flow-2026-05-04.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-04.md)
 - [scene1/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene1\README.md)
 - [scene2/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene2\README.md)
 - [scene3/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene3\README.md)
@@ -54,6 +55,14 @@
 当前正在使用和继续调参的批量流程快照见：
 
 - [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md)
+- [current-flow-2026-05-04.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-04.md)
+
+鏈€鏂扮殑 `scene4` 淇蹇収鏄?`current-flow-2026-05-04.md`锛屽叧閿彉鏇村寘鎷?:
+
+- `scene4` 鍙傝€冨浘鏀逛负鈥滃ご鑲╁弬鑰冣€?
+- 鐢风増淇濈暀鑷姩缁撴灉鏍￠獙
+- 濂崇増鏀剁揣 `refCrop` 鍜?mask锛屾殏鏃朵笉鍚敤鑷姩鏍￠獙
+- `素材/用户测试照片` 瀵?`scene4` 鐨勬渶鏂版壒閲忕粨鏋滄槸 `18/18` 鎴愬姛
 
 其中对应的已提交 commit：
 
