@@ -1060,8 +1060,31 @@ async function postComposite({ templatePath, templateW, templateH, aiBuf, maskCo
 async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW, templateH,
                                  userBase64, userDescription, gender, outputDir = OUTPUT_DIR, attemptLabel = null }) {
   const [outW, outH] = conf.size.split('x').map(Number);
-  const templateBase64 = toBase64DataUrl(templatePath);
   const controlProfile = INPAINT_CONTROL_PROFILES[conf.controlProfile] || INPAINT_CONTROL_PROFILES.default;
+
+  // ── Pre-fill mask: 用中性肤色填充mannequin区域，防止AI复制白色mannequin纹理 ──
+  let templateBase64;
+  if (conf.preFillMask) {
+    const scaleX = outW / templateW;
+    const scaleY = outH / templateH;
+    const mcx = Math.round((conf.mask.apiCx ?? conf.mask.cx) * scaleX);
+    const mcy = Math.round((conf.mask.apiCy ?? conf.mask.cy) * scaleY);
+    const mw  = Math.round((conf.mask.apiW ?? conf.mask.w) * scaleX);
+    const mh  = Math.round((conf.mask.apiH ?? conf.mask.h) * scaleY);
+    const mLeft = mcx - Math.round(mw / 2);
+    const mTop  = mcy - Math.round(mh / 2);
+    // 中性肤色填充 SVG
+    const skinSvg = `<svg width="${mw}" height="${mh}"><rect width="${mw}" height="${mh}" fill="rgb(180,155,130)"/></svg>`;
+    const tplBuf = await sharp(templatePath).resize(outW, outH, { fit: 'fill' }).toBuffer();
+    const filledBuf = await sharp(tplBuf)
+      .composite([{ input: Buffer.from(skinSvg), blend: 'over', left: mLeft, top: mTop }])
+      .jpeg({ quality: 95 })
+      .toBuffer();
+    templateBase64 = 'data:image/jpeg;base64,' + filledBuf.toString('base64');
+    console.log(`    [preFill] 用肤色填充mask区域 (${mLeft},${mTop}) ${mw}x${mh}`);
+  } else {
+    templateBase64 = toBase64DataUrl(templatePath);
+  }
 
   // 构建 mask：apiBuf=RGB黑白矩形（发给API），compBuf=RGBA羽化矩形（post-composite用）
   const { apiBuf, compBuf } =
@@ -1202,6 +1225,11 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
       );
       if (!validation.ok) {
         const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        // DEBUG: save failed result for diagnosis
+        const gTag = gender === 'female' ? 'F' : 'M';
+        const debugFile = path.join(outputDir, `scene${sceneId}_FAIL_DEBUG_${gTag}_${photoTag}_${Date.now()}.jpg`);
+        fs.writeFileSync(debugFile, finalBuf);
+        console.warn(`  [debug] 保存失败结果到 ${path.basename(debugFile)}`);
         console.warn(`  [retry] 场景${sceneId} ${conf.label}${attemptLabel ? ` (${attemptLabel})` : ''} 命中空头/缺头校验: ${validation.reason}`);
         return {
           photoTag,
@@ -1264,6 +1292,121 @@ async function runFaceswapTest({ photoTag, sceneId, conf, templatePath,
   }
 }
 
+// ── Faceswap-composite：Faceswap 生成 + 可选 Post-composite 锁背景 ──────
+// 流程：
+//   1. 用 faceswap 模式（无 mask）调用 API 生成完整换脸图
+//   2a. skipComposite=true：直接输出 faceswap 原始结果（prompt 已锁定背景）
+//   2b. skipComposite=false：用 compBuf mask 做 dest-in，叠加到原始底图锁定背景
+async function runFaceswapCompositeTest({ photoTag, sceneId, conf, templatePath, templateW, templateH,
+                                            userBase64, userDescription, gender, outputDir = OUTPUT_DIR }) {
+  const [outW, outH] = conf.size.split('x').map(Number);
+
+  // 1. 构建 faceswap prompt
+  const { prompt, negative_prompt } = buildFaceswapPrompt({
+    targetPerson: conf.targetPerson || 'the person on the far left',
+    userDescription,
+    gender,
+    templateType: conf.templateType || 'mannequin',
+  });
+
+  // 2. 构建 compBuf（仅 skipComposite=false 时需要）
+  let compBuf;
+  if (!conf.skipComposite) {
+    ({ compBuf } = await buildMask(templateW, templateH, conf.mask, outW, outH));
+  }
+
+  // 3. 调用 faceswap API（无 mask，完整图像生成）
+  const templateBase64 = toBase64DataUrl(templatePath);
+  const t0 = Date.now();
+  try {
+    const result = await generateNativeImage({
+      prompt,
+      negative_prompt,
+      images: [templateBase64, userBase64],
+      size: conf.size,
+      scene_params: {
+        strength: conf.strength ?? 0.50,
+        guidance_scale: conf.guidance,
+      },
+    });
+
+    // 4. 下载 AI 输出
+    const aiBuf = await downloadToBuffer(result.url);
+
+    let finalBuf;
+    if (conf.skipComposite) {
+      // 跳过 post-composite，直接使用 faceswap 原始输出
+      // faceswap prompt 已要求 AI 保留背景，无需 mask 合成
+      finalBuf = await sharp(aiBuf)
+        .resize(outW, outH, { fit: 'fill' })
+        .jpeg({ quality: 95 })
+        .toBuffer();
+      console.log(`    [skipComposite] 直接使用 faceswap 原始输出`);
+    } else {
+      // 5. AI 输出缩放到目标尺寸，加 alpha 通道
+      const aiResized = await sharp(aiBuf)
+        .resize(outW, outH, { fit: 'fill' })
+        .ensureAlpha()
+        .toBuffer();
+
+      // 6. 用 compBuf 做 dest-in：只保留 mask 区域像素
+      const aiFaceMasked = await sharp(aiResized)
+        .composite([{ input: compBuf, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+
+      // 7. 原始底图缩放（背景层）
+      const tplResized = await sharp(templatePath)
+        .resize(outW, outH, { fit: 'fill' })
+        .toBuffer();
+
+      // 8. 底图 + 人脸层叠加 → mask 外=底图原像素，mask 内=AI 人脸
+      finalBuf = await sharp(tplResized)
+        .composite([{ input: aiFaceMasked, blend: 'over' }])
+        .jpeg({ quality: 95 })
+        .toBuffer();
+    }
+
+    // 9. 验证
+    if (conf.validateHeadSwap) {
+      const validation = await validateHeadSwapResult(
+        `data:image/jpeg;base64,${finalBuf.toString('base64')}`,
+        conf.label,
+        conf.validationTarget,
+        conf.validationRule || ''
+      );
+      if (!validation.ok) {
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        const gTag = gender === 'female' ? 'F' : 'M';
+        const debugFile = path.join(outputDir, `scene${sceneId}_FAIL_DEBUG_${gTag}_${photoTag}_${Date.now()}.jpg`);
+        fs.writeFileSync(debugFile, finalBuf);
+        console.warn(`  [debug] 保存失败结果到 ${path.basename(debugFile)}`);
+        console.warn(`  [retry] 场景${sceneId} ${conf.label} 命中空头/缺头校验: ${validation.reason}`);
+        return {
+          photoTag, sceneId, label: conf.label, elapsed,
+          status: 'failed',
+          error: `validation fail: ${validation.reason}`,
+          retryable: true,
+        };
+      }
+    }
+
+    // 10. 保存
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const gTag    = gender === 'female' ? 'F' : 'M';
+    const outFile = path.join(outputDir, `scene${sceneId}_${gTag}_${photoTag}_${Date.now()}.jpg`);
+    fs.writeFileSync(outFile, finalBuf);
+    console.log(`  [✓] 场景${sceneId} ${conf.label} (faceswap-composite) → ${path.basename(outFile)} (${elapsed}s)`);
+    return { photoTag, sceneId, label: conf.label, elapsed, localFile: path.basename(outFile), status: 'ok' };
+
+  } catch (err) {
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const msg     = err.response?.data ? JSON.stringify(err.response.data).substring(0, 200) : err.message;
+    console.error(`  [✗] 场景${sceneId} ${conf.label} faceswap-composite 失败 (${elapsed}s): ${msg}`);
+    return { photoTag, sceneId, label: conf.label, elapsed, status: 'failed', error: msg };
+  }
+}
+
 // ── 单张照片跑所有场景 ────────────────────────────────────────
 async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir = OUTPUT_DIR }) {
   const photoTag   = path.basename(photoPath, path.extname(photoPath)).substring(0, 8);
@@ -1315,6 +1458,22 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
         if (!(r.retryable && idx < referenceVariants.length - 1)) break;
         console.warn(`  [retry] 场景${sceneId} ${conf.label} 切换参考图重试 -> ${referenceVariants[idx + 1].label}`);
       }
+    } else if (conf.mode === 'faceswap-composite') {
+      // Hybrid 模式：faceswap 生成 + post-composite 锁背景
+      const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
+        ? await toScaledReferenceDataUrl(
+            photoPath,
+            conf.refScale,
+            conf.refAnchor || 'center',
+            conf.refOffsetX ?? 0.5,
+            conf.refOffsetY
+          )
+        : userBase64;
+      r = await runFaceswapCompositeTest({
+        photoTag, sceneId, conf,
+        templatePath, templateW: meta.width, templateH: meta.height,
+        userBase64: sceneUserBase64, userDescription, gender, outputDir,
+      });
     } else {
       const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
         ? await toScaledReferenceDataUrl(

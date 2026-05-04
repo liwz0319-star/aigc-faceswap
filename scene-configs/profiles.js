@@ -7,21 +7,14 @@ module.exports = {
   scene1_portrait: {
     taskLine: 'Task: Perform a photorealistic head swap. Replace the entire placeholder head and upper neck inside the white mask region with the person from Image 2.',
     promptLines: [
-      'Head swap framing: Replace the full placeholder head from crown to chin, not just the center face.',
-      'Keep the full forehead, both cheeks, jawline, and chin visible inside the replacement area.',
-      'Torso protection: Do NOT generate skin, facial texture, eyes, nose, lips, or hair on the jersey, chest, shoulders, or beer glass area.',
-      'Skin transition: Keep the face skin tone close to the neck and body skin tone in Image 1, with a natural transition from jaw to neck.',
-      'Center lock: Keep the nose centered on the placeholder neck axis. Do NOT slide the face left or right.',
-      'Background lock: The blue locker background must stay identical to Image 1 and the head edge must blend softly into it.',
+      'Head swap framing: Replace the full placeholder head from crown to chin, not just the center face. Keep the full forehead, both cheeks, jawline, and chin visible.',
       'Head size lock: Match the original player head size in Image 1. Do NOT make the head oversized relative to the shoulders or torso.',
       'Realism lock: The face must remain a real photographic human face. No cartoon, no CGI, no doll-like stylization, and no oversized eyes.',
+      'Neck blend: Generate a natural jaw-to-neck transition that dissolves smoothly into the collar opening.',
     ],
     negativeTerms: [
-      'face texture on jersey', 'facial features on torso', 'eyes on clothing', 'mouth on shirt', 'hair on chest',
-      'blank mannequin face', 'featureless head', 'blue mannequin skin', 'unfinished head',
-      'half face', 'side-clipped face', 'cropped forehead', 'cropped chin', 'off-center face',
-      'dark head hole', 'black face void', 'featureless dark head',
-      'cartoon face', 'anime face', 'cgi face', '3d render face', 'doll face', 'toy face', 'oversized eyes', 'plastic skin',
+      'half face', 'cropped forehead', 'cropped chin', 'off-center face',
+      'cartoon face', 'anime face', 'cgi face', 'doll face', 'oversized eyes',
     ],
   },
   scene4_festival: {
