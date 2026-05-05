@@ -117,17 +117,20 @@ node .\test-faceswap-new-scenes.js "生成测试\照片\xxx.jpg" --scene 2
 - 运行回滚: 直接用该脚本独立复跑，不影响版本 4。
 - 代码回滚: 恢复 `test-faceswap-new-scenes.js`。
 
-## 版本 6: 当前配置版本（v1.0 基线 + hairDome mask）
+## 版本 6: 当前配置版本（v1.4 全面升级）
 
 - 配置文件: [scene-configs/scene2.js](../../scene-configs/scene2.js)
 - 运行脚本: [test-faceswap-inpaint-scenes.js](../../test-faceswap-inpaint-scenes.js)
 - 模式: `inpaint` + `post-composite`
-- 关联 commit: `871299d` ~ `0efb202`（v1.0 基线）
+- 关联 commit: 待提交
 
-### 与版本 4 的主要差异
+### 与版本 6 (v1.3) 的主要差异
 
-1. **男版**: 参数基本不变，仍为矩形 mask + inpaint，无 refScale（使用完整参考图）
-2. **女版**: 新增 `hairDome` mask 形状，带 sideHair 覆盖长发；新增精细 prompt（18 条）和 negative terms（~40 条）
+1. **新增 `refNormalize: true`**: 男版和女版都新增参考图标准化
+2. **新增 `validateHeadSwap: true`**: 男版和女版都启用自动校验
+3. **男版新增校验规则**: `validationTarget` + `validationRule`，要求头部居中于旗后颈部、旗面文字和球衣完整保留
+4. **女版新增校验规则**: 校验头部紧凑、crown 完整、旗面文字保留、右耳和侧发保留
+5. **女版新增 Maximum head size prompt**: 明确限制头部宽度不超过占位符宽度
 
 ### Scene 2 男
 
@@ -137,6 +140,10 @@ node .\test-faceswap-new-scenes.js "生成测试\照片\xxx.jpg" --scene 2
 | 尺寸 | 2048×2560 |
 | guidance | 10 |
 | refScale | 无（直接使用完整参考图） |
+| refNormalize | true |
+| validateHeadSwap | true |
+| validationTarget | the main swapped person behind the flag |
+| validationRule | The head must be centered above the neck behind the flag. The flag letters and Bayern jersey must be completely preserved. |
 
 **Mask 坐标**:
 
@@ -156,6 +163,10 @@ node .\test-faceswap-new-scenes.js "生成测试\照片\xxx.jpg" --scene 2
 | refScale | 0.30 |
 | refAnchor | north |
 | refOffsetY | 0.06 |
+| refNormalize | true |
+| validateHeadSwap | true |
+| validationTarget | the main swapped person behind the flag |
+| validationRule | The female head must be compact and not oversized. Full crown visible. Flag letters preserved. Right ear and side hair preserved. |
 
 **Mask 坐标**:
 
@@ -165,18 +176,18 @@ node .\test-faceswap-new-scenes.js "生成测试\照片\xxx.jpg" --scene 2
 | api (hairDome) | 394 | 134 | 196 | 218 | domeH=82, expandX=16 | sideHair: 24×58 @ (78,138) |
 | comp (hairDome) | 396 | 146 | 220 | 248 | domeH=92, expandX=20 | sideHair: 30×74 @ (86,150), feather=10 |
 
-**Prompt 要点** (extraPromptLines, 18 条):
+**Prompt 要点** (extraPromptLines, 20 条):
 - Flag portrait fit, Female head scale, Center lock, Vertical lock, Crown clearance
 - Hairstyle source lock, Bang rule, Hair state lock
 - Close-selfie handling, Full-head completion, Realism lock
 - Jersey preservation, Shoulder protection
 - Long-hair routing, Right-ear visibility, Hair silhouette, Right-side coverage
-- Patch suppression, Background lock
+- Maximum head size, Patch suppression, Background lock
 
 **Negative terms** (~40 条):
 - oversized/giant head, off-center/shifted head, cropped crown
 - invented bangs/curtain bangs, tied-up from loose source
-- cartoon/avatar/doll/cgi face
+- cartoon/avatar/doll/cgi/pixar/emoji face
 - missing right ear, missing right-side hair
 - literal selfie crop, source image patch
 - face inside flag, hair curtain over flag
@@ -192,4 +203,4 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 2 -
 回滚说明:
 
 - 运行回滚: 指定 `--scene 2` 复跑当前配置即可。
-- 代码回滚: `git checkout 0efb202 -- scene-configs/scene2.js`
+- 代码回滚: `git checkout 78e9ce2 -- scene-configs/scene2.js`

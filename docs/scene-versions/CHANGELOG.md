@@ -306,6 +306,154 @@ scene-configs/
 
 ---
 
+## v1.4 — 2026-05-06 — 全场景统一升级：hairDome mask、refNormalize、validateHeadSwap、prompt 扩充
+
+**修改人**: liwz0319
+**关联 commit**: （待提交）
+**影响范围**: 全部 4 个场景（scene1~scene4），全部配置文件 + 主运行脚本
+
+### 变更摘要
+
+对所有 4 个场景进行统一升级，核心变更包括：
+1. **hairDome mask 统一化**: scene4 男/女从矩形 mask 切换为 hairDome，与 scene1/scene3 保持一致
+2. **refNormalize 统一启用**: 所有场景新增 `refNormalize: true`，参考图标准化处理
+3. **validateHeadSwap 统一启用**: 所有场景启用自动校验（scene4 从 false 改为 true），并配置场景化校验规则
+4. **strength 参数新增**: scene1 新增 `strength: 0.85`；scene4 女版降低至 0.55
+5. **preFillMask 新增**: scene1 男/女新增 `preFillMask: true`
+6. **prompt 大幅扩充**: 所有场景新增发型锁定、颈部肤色过渡、写实锁定等 prompt
+7. **negative terms 大幅扩充**: 所有场景新增 neck color seam、oversized head 系列、cartoon 全系列、invented hairstyle 系列等
+8. **mask 坐标调整**: scene1/scene3 domeH 扩大、feather 增大、neck 椭圆参数调整；scene4 整体改为 hairDome
+
+### 参数变更对照
+
+#### Scene 1 男
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| strength | 无 | **0.85** | 新增 inpaint 强度控制 |
+| refScale | 0.30 | **0.34** | 提升参考图比例 |
+| refScaleCandidates | [0.30, 0.36] | **[0.34, 0.40]** | 配合 refScale |
+| preFillMask | 无 | **true** | 预填充 mask 改善质量 |
+| refNormalize | 无 | **true** | 参考图标准化 |
+| extraPromptLines | 7 条 | **17 条** | 新增 Strict head size, Neck skin tone, Head proportion, Hairstyle lock 等 |
+| extraNegativeTerms | 13 条 | **~50 条** | 新增 neck color seam, oversized 系列, hairstyle 系列, cartoon 全系列 |
+| apiDomeH | 93 | **126** | dome 扩大 |
+| compDomeH | 99 | **152** | composite dome 大幅扩大 |
+| compFeather | 11 | **30** | feather 增大让边缘更柔和 |
+| apiCy | 832 | **812** | API mask 上移 |
+| compCy | 840 | **814** | composite mask 上移 |
+| apiNeckRy | 136 | **144** | 颈部椭圆扩大 |
+| compNeckRy | 152 | **188** | composite 颈部椭圆大幅扩大 |
+
+#### Scene 1 女
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| strength | 无 | **0.85** | 新增 inpaint 强度控制 |
+| refScale | 0.24 | **0.30** | 提升参考图比例 |
+| refScaleCandidates | [0.24, 0.30] | **[0.30, 0.36]** | 配合 refScale |
+| preFillMask | 无 | **true** | 预填充 mask |
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | 无 | **true** | 新增校验 |
+| extraPromptLines | 12 条 | **18 条** | 新增 Strict head size, Neck skin tone, Head proportion, Hair side coverage 等 |
+| extraNegativeTerms | 18 条 | **~50 条** | 同男版扩充 |
+| apiDomeH | 101 | **128** | dome 扩大 |
+| compDomeH | 104 | **144** | composite dome 大幅扩大 |
+| compFeather | 12 | **30** | feather 增大 |
+| apiCy | 832 | **810** | API mask 上移 |
+| compCy | 840 | **814** | composite mask 上移 |
+
+#### Scene 2 男
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | 无 | **true** | 新增校验 |
+| validationTarget | 无 | **the main swapped person behind the flag** | 校验目标 |
+| validationRule | 无 | **head centered, flag+jersey preserved** | 校验规则 |
+
+#### Scene 2 女
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | 无 | **true** | 新增校验 |
+| validationTarget | 无 | **the main swapped person behind the flag** | 校验目标 |
+| extraPromptLines | 18 条 | **20 条** | 新增 Maximum head size prompt |
+
+#### Scene 3 男
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| refScale | 0.36 | **0.42** | 增大参考图比例改善面部质量 |
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | 无 | **true** | 新增校验 |
+| extraPromptLines | 12 条 | **20 条** | 新增 Hairstyle source lock, Short-hair fidelity, Bang rule, Hair state lock, Neck-to-collar blend, Shoulder integrity, Realism lock |
+| extraNegativeTerms | ~20 条 | **~60 条** | 新增 invented hairstyle 系列, neck color seam, ghost shoulder 系列, cartoon 全系列, selfie crop |
+| apiDomeH | 120 | **138** | dome 扩大 |
+| compDomeH | 128 | **148** | composite dome 扩大 |
+| compFeather | 12 | **18** | feather 增大 |
+| apiCy | 260 | **254** | 上移 |
+| compCy | 264 | **258** | 上移 |
+| apiW | 190 | **196** | 微调 |
+| compW | 236 | **240** | 微调 |
+| compH | 406 | **420** | 扩大 |
+
+#### Scene 3 女
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| refScale | 0.28 | **0.26** | 收紧参考图比例修复头部过大 |
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | 无 | **true** | 新增校验 |
+| extraPromptLines | 12 条 | **18 条** | 新增 Hairstyle lock, Bang/Hair state lock, Neck-to-collar, Shoulder integrity, Realism lock |
+| extraNegativeTerms | ~15 条 | **~40 条** | 大幅扩充 |
+| apiDomeH | 100 | **96** | 微调 |
+| compDomeH | 108 | **104** | 微调 |
+| apiH | 390 | **356** | 收窄 |
+| compH | 434 | **398** | 收窄 |
+| base w | 202 | **198** | 微调 |
+| base h | 404 | **356** | 收窄 |
+
+#### Scene 4 男（重大 mask 变更）
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| refScale | 0.42 | **0.45** | 微调 |
+| refCrop height | 0.55 | **0.78** | 大幅扩大裁切范围 |
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | false | **true** | 启用校验 |
+| **mask apiShape** | **矩形** | **hairDome** | **核心变更**：贴合头冠弧度 |
+| mask cy | 242 | **234** | 上移 |
+| mask w | 100 | **116** | 扩大 |
+| mask h | 170 | **186** | 扩大 |
+| apiDomeH | 无 | **70** | 新增 dome |
+| compDomeH | 无 | **82** | 新增 composite dome |
+| compFeather | 8 | **10** | 微调 |
+| extraPromptLines | 8 条 | **12 条** | 新增 Anti-feminization lock, Crown clearance, Neck-clothing boundary, Realism lock |
+| extraNegativeTerms | 13 条 | **~25 条** | 新增 feminine bob/pixie, gender swapped hairstyle, collar bleeding, cartoon 全系列 |
+
+#### Scene 4 女（重大 mask 变更）
+
+| 参数 | v1.3 | v1.4 | 原因 |
+|------|------|------|------|
+| strength | 0.65 | **0.55** | 降低强度 |
+| refScale | 0.30 | **0.33** | 微调 |
+| refCrop height | 0.40 | **0.72** | 大幅扩大裁切范围 |
+| refNormalize | 无 | **true** | 参考图标准化 |
+| validateHeadSwap | false | **true** | 启用校验 |
+| **mask apiShape** | **矩形** | **hairDome** | **核心变更**：贴合头冠弧度 |
+| mask cy | 235 | **230** | 微调 |
+| mask w | 100 | **120** | 扩大 |
+| mask h | 166 | **190** | 扩大 |
+| apiDomeH | 无 | **84** | 新增 dome |
+| compDomeH | 无 | **96** | 新增 composite dome |
+| compFeather | 8 | **12** | 微调 |
+| extraPromptLines | 10 条 | **14 条** | 新增 Crown clearance, Full hair rendering, Neck-clothing boundary, Realism lock |
+| extraNegativeTerms | ~18 条 | **~35 条** | 新增 truncated hair, collar bleeding, cartoon 全系列 |
+
+---
+
 ## v1.2 — 2026-05-05 — Scene3 回退 inpaint 模式 + hairDome mask 优化
 
 **修改人**: liwz0319

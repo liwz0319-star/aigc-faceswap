@@ -2,6 +2,7 @@ module.exports = {
   male: {
     file: '场景2.png', label: '场景2（球场举旗）',
     mode: 'inpaint', size: '2048x2560', guidance: 10,
+    refNormalize: true,
     validateHeadSwap: true,
     validationTarget: 'the main swapped person behind the flag',
     validationRule: 'The head must be centered above the neck behind the flag. The flag letters and Bayern jersey must be completely preserved.',
@@ -16,6 +17,7 @@ module.exports = {
     file: '场景2.png', label: '场景2（球场举旗）',
     mode: 'inpaint', size: '2048x2560', guidance: 10,
     refScale: 0.30, refAnchor: 'north', refOffsetY: 0.06,
+    refNormalize: true,
     validateHeadSwap: true,
     validationTarget: 'the main swapped person behind the flag',
     validationRule: 'The female head must be compact and not oversized. Full crown visible. Flag letters preserved. Right ear and side hair preserved.',

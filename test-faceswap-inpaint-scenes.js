@@ -668,7 +668,85 @@ async function validateHeadSwapResult(resultBase64, sceneLabel, targetPerson = '
   }
 }
 
-async function buildReferenceVariants(photoPath, conf, originalUserBase64) {
+// ── 脸部检测：标准化参考图 ──────────────────────────────────────
+// 核心思路：不同用户照片的脸部占比差异巨大（大头照 vs 全身照），
+// 导致 API 模型对头部大小的"锚定"不一致 → 头部尺寸不可控。
+// 解决方案：检测脸部位置 → 裁剪到统一大小的头部区域 →
+// 无论原始照片是什么，API 看到的都是同样大小的脸。
+const _faceBoundsCache = new Map();
+
+async function detectFaceBounds(imageBase64) {
+  const cacheKey = imageBase64.length > 200 ? imageBase64.substring(0, 200) : imageBase64;
+  if (_faceBoundsCache.has(cacheKey)) return _faceBoundsCache.get(cacheKey);
+
+  const key = process.env.VISION_API_KEY;
+  if (!key) return null;
+  const url = process.env.VISION_API_URL || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+
+  try {
+    const res = await axios.post(url, {
+      model: process.env.VISION_MODEL || 'doubao-1-5-vision-pro-32k-250115',
+      messages: [{ role: 'user', content: [
+        { type: 'image_url', image_url: { url: imageBase64 } },
+        { type: 'text', text:
+          'Look at this photo. Estimate the bounding box of the FULL HEAD (from top of hair/highest point to bottom of chin, including all hair volume on sides). ' +
+          'Return ONLY valid JSON: {"x":percent_from_left,"y":percent_from_top,"w":width_percent,"h":height_percent}. ' +
+          'All values are percentages (0-100) of image dimensions. x/y is top-left corner. Reply ONLY with the JSON object, no other text.',
+        },
+      ]}],
+      max_tokens: 80,
+      temperature: 0,
+    }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, timeout: 15000 });
+
+    const content = (res.data?.choices?.[0]?.message?.content || '').trim();
+    const match = content.match(/\{[^}]+\}/);
+    if (!match) { _faceBoundsCache.set(cacheKey, null); return null; }
+
+    const raw = JSON.parse(match[0]);
+    const result = {
+      x: clamp(Number(raw.x) || 20, 0, 90),
+      y: clamp(Number(raw.y) || 10, 0, 90),
+      w: clamp(Number(raw.w) || 30, 5, 95),
+      h: clamp(Number(raw.h) || 30, 5, 95),
+    };
+    _faceBoundsCache.set(cacheKey, result);
+    return result;
+  } catch (e) {
+    console.warn(`  [faceDetect] 脸部检测失败: ${e.message}`);
+    _faceBoundsCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+/**
+ * 将 Vision API 返回的脸部边界转换为 refCrop 格式
+ * 添加 padding 让裁剪区域包含完整头发
+ */
+function faceBoundsToCrop(face) {
+  // face: { x, y, w, h } 百分比 (0-100)
+  const padSideRatio = 0.35;  // 两侧各加 35% 脸宽的 padding
+  const padTopRatio  = 0.45;  // 上方加 45% 脸高的 padding（覆盖头发）
+  const padBottomRatio = 0.15; // 下方加 15% 脸高的 padding（覆盖下巴到脖子）
+
+  const padW = face.w * padSideRatio;
+  const padTop = face.h * padTopRatio;
+  const padBottom = face.h * padBottomRatio;
+
+  const cropX = Math.max(0, face.x - padW);
+  const cropY = Math.max(0, face.y - padTop);
+  const cropW = Math.min(100 - cropX, face.w + padW * 2);
+  const cropH = Math.min(100 - cropY, face.h + padTop + padBottom);
+
+  // 转为 refCrop 格式（比例 0-1）
+  const width  = cropW / 100;
+  const height = cropH / 100;
+  const offsetX = width < 0.99 ? clamp((cropX / 100) / (1 - width), 0, 1) : 0.5;
+  const offsetY = height < 0.99 ? clamp((cropY / 100) / (1 - height), 0, 1) : 0.5;
+
+  return { width, height, offsetX, offsetY };
+}
+
+async function buildReferenceVariants(photoPath, conf, originalUserBase64, faceCrop = null) {
   const candidates = Array.isArray(conf.refScaleCandidates) && conf.refScaleCandidates.length > 0
     ? conf.refScaleCandidates
     : [conf.refScale ?? 1];
@@ -679,6 +757,27 @@ async function buildReferenceVariants(photoPath, conf, originalUserBase64) {
 
   const variants = [];
   const seen = new Set();
+
+  // ── 脸部标准化变体（优先级最高，放在第一个）──
+  // 无论原始照片是大头照还是全身照，裁剪到统一的头部区域后缩放到固定比例
+  // 确保 API 每次看到的参考图中脸部占比一致 → 头部大小一致
+  if (faceCrop && conf.refNormalize) {
+    const headFill = conf.refHeadFillRatio ?? 0.38;
+    const useSoftOval = Boolean(conf.refAlwaysSoftOval);
+
+    try {
+      const normBase64 = useSoftOval
+        ? await toSoftOvalReferenceDataUrl(photoPath, headFill, conf.refAnchor || 'center', conf.refOffsetX ?? 0.5, conf.refOffsetY, faceCrop)
+        : await toScaledReferenceDataUrl(photoPath, headFill, conf.refAnchor || 'center', conf.refOffsetX ?? 0.5, conf.refOffsetY, faceCrop);
+      const normLabel = `face-norm${useSoftOval ? '+oval' : ''}@${headFill}`;
+      variants.push({ label: normLabel, scale: headFill, base64: normBase64 });
+      console.log(`    [faceNormalize] 标准化参考图: 裁剪${useSoftOval ? '+软椭圆' : ''} 缩放=${headFill}`);
+    } catch (e) {
+      console.warn(`    [faceNormalize] 生成失败，回退到普通变体: ${e.message}`);
+    }
+  }
+
+  // ── 原有变体（作为 fallback）──
   for (const cropEntry of cropEntries) {
     for (const rawScale of candidates) {
       const scale = (!rawScale || rawScale >= 0.999) ? 1 : Number(rawScale);
@@ -1205,7 +1304,7 @@ async function runInpaintTest({ photoTag, sceneId, conf, templatePath, templateW
       model: MODEL, prompt, negative_prompt,
       image: [templateBase64, userBase64],
       mask_image: maskBase64,
-      strength: 1.0,
+      strength: conf.strength ?? 1.0,
       guidance_scale: conf.guidance,
       response_format: 'url',
       size: conf.size,
@@ -1455,6 +1554,16 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
   const gender = forceGender || await detectGender(userBase64);
   console.log(`  性别: ${gender}`);
 
+  // ── 脸部检测（每张照片只做一次，结果缓存）──
+  let faceCrop = null;
+  try {
+    const face = await detectFaceBounds(userBase64);
+    if (face) {
+      faceCrop = faceBoundsToCrop(face);
+      console.log(`  脸部位置: x=${face.x}% y=${face.y}% w=${face.w}% h=${face.h}% → 裁剪 ${Math.round(faceCrop.width*100)}%×${Math.round(faceCrop.height*100)}%`);
+    }
+  } catch (e) { console.warn(`  脸部检测失败: ${e.message}`); }
+
   const results = [];
   for (const sceneId of sceneIds) {
     const sceneConf = SCENE_CONFIGS[sceneId];
@@ -1476,7 +1585,7 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
 
     let r;
     if (conf.mode === 'inpaint') {
-      const referenceVariants = await buildReferenceVariants(photoPath, conf, userBase64);
+      const referenceVariants = await buildReferenceVariants(photoPath, conf, userBase64, faceCrop);
       for (let idx = 0; idx < referenceVariants.length; idx++) {
         const refVariant = referenceVariants[idx];
         r = await runInpaintTest({
@@ -1497,13 +1606,16 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
       if (baseStrength < 0.55) strengthSteps.push(Math.min(0.70, baseStrength + 0.16));
       for (let si = 0; si < strengthSteps.length; si++) {
         const retryConf = si === 0 ? conf : { ...conf, strength: strengthSteps[si] };
-        const sceneUserBase64 = (retryConf.refScale && retryConf.refScale < 0.999)
+        // 优先使用脸部标准化裁剪
+        const normCrop = (faceCrop && retryConf.refNormalize) ? faceCrop : (retryConf.refCrop || null);
+        const sceneUserBase64 = (retryConf.refScale && retryConf.refScale < 0.999) || normCrop
           ? await toScaledReferenceDataUrl(
               photoPath,
-              retryConf.refScale,
+              retryConf.refScale ?? 1,
               retryConf.refAnchor || 'center',
               retryConf.refOffsetX ?? 0.5,
-              retryConf.refOffsetY
+              retryConf.refOffsetY,
+              normCrop
             )
           : userBase64;
         r = await runFaceswapCompositeTest({
@@ -1517,13 +1629,15 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
         }
       }
     } else {
-      const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
+      const normCrop2 = (faceCrop && conf.refNormalize) ? faceCrop : (conf.refCrop || null);
+      const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999) || normCrop2
         ? await toScaledReferenceDataUrl(
             photoPath,
-            conf.refScale,
+            conf.refScale ?? 1,
             conf.refAnchor || 'center',
             conf.refOffsetX ?? 0.5,
-            conf.refOffsetY
+            conf.refOffsetY,
+            normCrop2
           )
         : userBase64;
       r = await runFaceswapTest({

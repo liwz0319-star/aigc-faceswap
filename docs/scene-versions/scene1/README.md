@@ -83,20 +83,23 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1 -
 - 运行回滚: 指定 `--scene 1` 即可只跑场景 1。
 - 代码回滚: 由于该脚本同时影响 `scene1/scene2/scene4`，回滚前要确认不会误伤其它场景。
 
-## 版本 5: 当前配置版本（v1.1+ 迭代优化）
+## 版本 5: 当前配置版本（v1.4 全面升级）
 
 - 配置文件: [scene-configs/scene1.js](../../scene-configs/scene1.js)
 - 共用 profile: `scene1_portrait`（[profiles.js](../../scene-configs/profiles.js)）
 - 运行脚本: [test-faceswap-inpaint-scenes.js](../../test-faceswap-inpaint-scenes.js)
 - 模式: `inpaint` + `post-composite`
-- 关联 commit: `90e2519` 及后续迭代
+- 关联 commit: 待提交
 
-### 与版本 4 的主要差异
+### 与版本 4 (v1.3) 的主要差异
 
-1. **mask 从矩形改为 hairDome + neck 覆盖**: 新增 `apiNeckRx/apiNeckRy` 参数，贴合颈线，避免裁切
-2. **大幅精简 prompt/negative terms**: 男版 17→7 条 prompt，~40→13 条 negative；女版 30→12 条 prompt，~55→18 条 negative
-3. **refScale 收紧**: 男版 0.38→0.30，女版 0.30→0.24，减小参考图比例避免头部过大
-4. **scene1_portrait profile 精简**: 去除适得其反的 skin transition prompt，7→4 条
+1. **新增 `strength: 0.85`**: 控制 inpaint 强度
+2. **新增 `preFillMask: true`**: 预填充 mask 区域，改善生成质量
+3. **新增 `refNormalize: true`**: 参考图标准化处理
+4. **prompt 大幅扩充**: 男版 7→17 条、女版 12→18 条，新增 Strict head size、Neck skin tone continuity、Neck depth coverage、Head proportion constraint、Hairstyle source lock、Short-hair fidelity、Realism lock 等
+5. **negative terms 大幅扩充**: 男版 13→~50 条、女版 18→~50 条，新增 neck color seam、two-tone neck、oversized head 系列、invented hairstyle 系列、cartoon 全系列等
+6. **refScale 调整**: 男版 0.30→0.34，女版 0.24→0.30
+7. **mask 坐标调整**: apiCy 上移（832→812/810），domeH 扩大（93→126/101→128），feather 增大（11/12→30），neck 椭圆参数调整
 
 ### Scene 1 男
 
@@ -105,34 +108,42 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1 -
 | 底图 | `场景1男.jpg` |
 | 尺寸 | 2048×2560 |
 | guidance | 10 |
-| refScale | 0.30 |
+| strength | 0.85 |
+| refScale | 0.34 |
 | refAnchor | north |
 | refOffsetY | 0.08 |
-| refScaleCandidates | [0.30, 0.36] |
+| refScaleCandidates | [0.34, 0.40] |
 | includeOriginalReferenceFallback | true |
 | validateHeadSwap | true |
+| preFillMask | true |
+| refNormalize | true |
 
 **Mask 坐标**:
 
 | 用途 | cx | cy | w | h | 形状 | 附加参数 |
 |------|----|----|---|---|------|---------|
 | 基础 | 1140 | 844 | 136 | 230 | — | — |
-| api (hairDome) | 1142 | 832 | 144 | 253 | domeH=93, expandX=13 | sideHair: 18×50 @ (67,118), neck: rx=112, ry=136 @ offsetY=176 |
-| comp (hairDome) | 1142 | 840 | 163 | 270 | domeH=99, expandX=16 | sideHair: 22×62 @ (74,128), neck: rx=128, ry=152 @ offsetY=184, feather=11 |
+| api (hairDome) | 1142 | 812 | 108 | 226 | domeH=126, expandX=10 | sideHair: 16×52 @ (56,112), neck: rx=66, ry=144 @ offsetY=200 |
+| comp (hairDome) | 1142 | 814 | 160 | 318 | domeH=152, expandX=26 | sideHair: 28×68 @ (74,128), neck: rx=100, ry=188 @ offsetY=218, feather=30 |
 
-**Prompt 要点** (extraPromptLines, 7 条):
-- Compact portrait fit, Crown clearance
-- Jaw completion, No mannequin carry-over
-- Single-head rule, Neck edge clarity
+**Prompt 要点** (extraPromptLines, 17 条):
+- Strict head size, Compact portrait fit, Crown clearance, Hair side coverage
+- Jaw completion, No mannequin carry-over, Single-head rule
+- Neck edge clarity, Neck skin tone continuity, Neck depth coverage
+- Head proportion constraint
 - Background consistency
+- Hairstyle source lock, Short-hair fidelity, Bang rule
+- Close-selfie handling, Realism lock
 
-**Negative terms** (13 条):
-- half face, cropped crown, top-clipped hair
+**Negative terms** (~50 条):
+- half face, cropped crown, top-clipped hair, side-clipped hair
 - double face, residual mannequin head
-- missing chin, blank mannequin neck
-- blurry neck, foggy neck edge
+- missing chin, blank mannequin neck, blurry neck
 - dark head hole, black face void
-- cartoon face, doll face, oversized eyes
+- neck color seam, two-tone neck, neck skin tone jump, visible neck boundary line
+- oversized head, giant head, head filling mask, head overflowing, head touching edge, wide head, broad face
+- invented hairstyle, added hair length, extra hair volume, different hairstyle, invented bangs, bob from buzz cut
+- cartoon/anime/cgi/doll/pixar/emoji face, oversized eyes, plastic skin, 3d render
 
 ### Scene 1 女
 
@@ -141,36 +152,43 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1 -
 | 底图 | `场景1女.jpg` |
 | 尺寸 | 2048×2560 |
 | guidance | 10 |
-| refScale | 0.24 |
+| strength | 0.85 |
+| refScale | 0.30 |
 | refAnchor | north |
 | refOffsetY | 0.08 |
-| refScaleCandidates | [0.24, 0.30] |
+| refScaleCandidates | [0.30, 0.36] |
 | refAlwaysSoftOval | true |
+| validateHeadSwap | true |
+| preFillMask | true |
+| refNormalize | true |
 
 **Mask 坐标**:
 
 | 用途 | cx | cy | w | h | 形状 | 附加参数 |
 |------|----|----|---|---|------|---------|
 | 基础 | 1140 | 846 | 131 | 226 | — | — |
-| api (hairDome) | 1142 | 832 | 144 | 250 | domeH=101, expandX=16 | sideHair: 26×78 @ (75,128), neck: rx=104, ry=132 @ offsetY=176 |
-| comp (hairDome) | 1142 | 840 | 166 | 280 | domeH=104, expandX=18 | sideHair: 30×101 @ (83,141), neck: rx=120, ry=148 @ offsetY=184, feather=12 |
+| api (hairDome) | 1142 | 810 | 110 | 230 | domeH=128, expandX=12 | sideHair: 20×72 @ (62,122), neck: rx=68, ry=142 @ offsetY=200 |
+| comp (hairDome) | 1142 | 814 | 164 | 332 | domeH=144, expandX=24 | sideHair: 30×100 @ (80,138), neck: rx=104, ry=184 @ offsetY=218, feather=30 |
 
-**Prompt 要点** (extraPromptLines, 12 条):
-- Compact portrait fit, Crown clearance
-- Hairstyle source lock, Bang rule
-- Close-selfie handling, Long-hair routing, Shoulder clearance
-- Jaw completion, No mannequin carry-over
-- Single-head rule, Neck edge clarity, Background consistency
+**Prompt 要点** (extraPromptLines, 18 条):
+- Strict head size, Compact portrait fit, Crown clearance, Hair side coverage
+- Head proportion constraint
+- Hairstyle source lock, Bang rule, Close-selfie handling
+- Long-hair routing, Shoulder clearance
+- Jaw completion, No mannequin carry-over, Single-head rule
+- Neck edge clarity, Neck skin tone continuity, Neck depth coverage
+- Background consistency, Realism lock
 
-**Negative terms** (18 条):
-- half face, cropped crown, top-clipped hair
+**Negative terms** (~50 条):
+- half face, cropped crown, top-clipped hair, side-clipped hair
 - double face, residual mannequin head
-- invented bangs, ponytail from down hair
-- long hair over center chest, hair covering beer glass
+- invented bangs, ponytail from down hair, long hair over chest, hair covering beer glass
 - blurry neck, missing chin, blank mannequin neck
-- dark head hole, black face void
-- literal selfie crop, source image patch
-- cartoon face, doll face, oversized eyes
+- dark head hole, black face void, literal selfie crop, source image patch
+- neck color seam, two-tone neck, neck skin tone jump, visible neck boundary line
+- oversized head, giant head, head filling mask, head overflowing, wide head, broad face
+- invented hairstyle, added hair length, extra hair volume, different hairstyle
+- cartoon/anime/cgi/doll/pixar/emoji face, oversized eyes, plastic skin, 3d render
 
 ### 共用 profile (scene1_portrait)
 
@@ -189,4 +207,4 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1 -
 回滚说明:
 
 - 运行回滚: 指定 `--scene 1` 复跑当前配置即可。
-- 代码回滚: `git checkout 90e2519 -- scene-configs/scene1.js scene-configs/profiles.js`
+- 代码回滚: `git checkout 78e9ce2 -- scene-configs/scene1.js scene-configs/profiles.js`

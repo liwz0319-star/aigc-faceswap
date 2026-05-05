@@ -66,6 +66,6 @@ docs/scene-versions/CHANGELOG.md
 
 ### 当前版本
 
-- **版本号**: v1.3
-- **日期**: 2026-05-05
-- **基线说明**: Scene1/Scene4 后续迭代优化，含 hairDome + neck mask、faceswap-composite 模式，详见 `docs/scene-versions/CHANGELOG.md`
+- **版本号**: v1.4
+- **日期**: 2026-05-06
+- **基线说明**: 全场景统一升级：hairDome mask 统一化、refNormalize、validateHeadSwap、prompt 大幅扩充，详见 `docs/scene-versions/CHANGELOG.md`

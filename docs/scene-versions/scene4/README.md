@@ -61,22 +61,26 @@ node .\server\test_scene04_kane_musiala_neuer.js
 - 运行回滚: 该脚本是独立测试，不影响本地批量脚本。
 - 代码回滚: 恢复 `server/test_scene04_kane_musiala_neuer.js` 即可。
 
-## 版本 4: 当前配置版本（v1.1+ faceswap-composite 模式）
+## 版本 4: 当前配置版本（v1.4 faceswap-composite + hairDome mask + 防女性化）
 
 - 配置文件: [scene-configs/scene4.js](../../scene-configs/scene4.js)
 - 共用 profile: `scene4_festival`（[profiles.js](../../scene-configs/profiles.js)）
 - 运行脚本: [test-faceswap-inpaint-scenes.js](../../test-faceswap-inpaint-scenes.js)
 - 模式: `faceswap-composite`（先用 faceswap 模式生成完整换脸图，再用 post-composite mask 锁定背景）
-- 关联 commit: `90e2519` 及后续迭代
+- 关联 commit: 待提交
 
-### 与版本 2 的主要差异（重大架构变更）
+### 与版本 4 (v1.3) 的主要差异
 
-1. **模式从 inpaint 切换为 faceswap-composite**: Seedream inpaint 在远端边缘 100% 失败，faceswap 使用语义级背景锁替代像素级 mask
-2. **输出尺寸变更**: 2560×1536 → 男 2326×1588 / 女 2328×1586（匹配新底图分辨率）
-3. **guidance 降低**: 10 → 8，防止过度处理
-4. **男版 skipComposite: false**: 必须 composite 把原始底图 mask 外像素贴回，锁定背景
-5. **mask 扩大 ~50%**: 横向和纵向均大幅扩展
-6. **prompt 全面替换**: 从 inpaint prompt 改为 faceswap prompt，侧重发型忠实复制和场景衣物保留
+1. **mask 从矩形改为 hairDome**: 男版和女版都使用 hairDome + sideHair 形状，贴合头冠弧度
+2. **新增 `validateHeadSwap: true`**: 男版和女版都启用自动校验（之前为 false）
+3. **新增 `refNormalize: true`**: 参考图标准化
+4. **男版新增 Anti-feminization lock**: 防止短发男性被女性化为 bob/pixie 发型
+5. **男版新增 Neck-clothing boundary prompt**: 防止 AI 渲染参考图衣物到场景中
+6. **女版新增 Full hair rendering prompt**: 确保完整长发长度不被截断
+7. **女版新增 Crown clearance prompt**: 防止头顶被裁切
+8. **refCrop 调整**: 男版 height 0.55→0.78，女版 height 0.40→0.72，大幅扩大裁切范围
+9. **女版 strength 降低**: 0.65→0.55
+10. **negative terms 大幅扩充**: 男版 13→~25 条、女版 ~18→~35 条
 
 ### Scene 4 男
 
@@ -87,36 +91,40 @@ node .\server\test_scene04_kane_musiala_neuer.js
 | guidance | 8 |
 | strength | 0.45 |
 | templateType | faceswap |
-| refScale | 0.42 |
+| refScale | 0.45 |
 | refAnchor | north |
 | refOffsetY | 0.08 |
-| refCrop | width=0.72, height=0.55, offsetX=0.5, offsetY=0.02 |
+| refCrop | width=0.72, height=0.78, offsetX=0.5, offsetY=0.00 |
+| refNormalize | true |
 | skipComposite | false（必须 composite 锁定背景） |
-| validateHeadSwap | false |
+| validateHeadSwap | true |
 | validationTarget | the person on the far left |
+| validationRule | 男版发型必须匹配源照片，短发保持短发，无女性化 bob/pixie。完整头部 crown→chin。巴伐利亚服装保留。 |
 
-**Mask 坐标**（基于新底图 1005×686）:
+**Mask 坐标**（基于新底图 1005×686，v6 hairDome）:
 
-| 用途 | cx | cy | w | h | 附加 |
-|------|----|----|---|---|------|
-| 基础 | 142 | 242 | 100 | 170 | — |
-| api | 144 | 238 | 112 | 166 | — |
-| comp | 144 | 240 | 140 | 194 | solidTopH=26, solidTopInset=12, feather=8 |
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 142 | 234 | 116 | 186 | — | — |
+| api (hairDome) | 144 | 228 | 118 | 178 | domeH=70, expandX=12 | sideHair: 16×42 @ (50,82) |
+| comp (hairDome) | 144 | 230 | 148 | 198 | domeH=82, expandX=16 | sideHair: 22×54 @ (58,90), feather=10 |
 
-**Prompt 要点** (extraPromptLines, 8 条):
+**Prompt 要点** (extraPromptLines, 12 条):
 - Hairstyle source lock (HIGHEST PRIORITY), Short-hair fidelity
-- Hair length copy, Hair texture copy
+- Anti-feminization lock (MANDATORY)
+- Hair length copy, Hair texture copy, Crown clearance
 - Head proportion
 - Scene clothing preservation (CRITICAL), Source clothing exclusion
-- Single-head rule
+- Neck-clothing boundary (CRITICAL)
+- Single-head rule, Realism lock
 
-**Negative terms** (13 条):
-- invented hairstyle, added hair length, extra hair volume
-- bob cut from short hair, long hair from buzz cut
-- different hairstyle, changed hair texture
-- oversized head, source photo clothing
-- user collar visible, reference shirt collar
-- source jacket, double face, residual mannequin head
+**Negative terms** (~25 条):
+- invented/added/changed hairstyle, bob from short hair, long from buzz cut
+- feminine bob from male, pixie from male, feminized male hair, gender swapped hairstyle
+- cropped crown, oversized head
+- source photo clothing, user/reference collar, collar bleeding, user neckline fabric
+- double face, residual mannequin head
+- cartoon/anime/cgi/doll/pixar/emoji face, oversized eyes, plastic skin, 3d render
 
 ### Scene 4 女
 
@@ -125,46 +133,43 @@ node .\server\test_scene04_kane_musiala_neuer.js
 | 底图 | `场景4女.png` |
 | 尺寸 | 2328×1586 |
 | guidance | 8 |
-| strength | 0.65 |
+| strength | 0.55 |
 | templateType | faceswap |
-| refScale | 0.30 |
+| refScale | 0.33 |
 | refAnchor | north |
 | refOffsetY | 0.08 |
-| refCrop | width=0.68, height=0.40, offsetX=0.5, offsetY=0.03 |
+| refCrop | width=0.68, height=0.72, offsetX=0.5, offsetY=0.01 |
+| refNormalize | true |
 | skipComposite | false |
-| validateHeadSwap | false |
+| validateHeadSwap | true |
 | validationTarget | the person on the far left |
+| validationRule | 女版头部完整 crown→hair 可见，无裁切。写实面部。巴伐利亚 dirndl 保留。无源衣物。 |
 
-**Mask 坐标**（基于新底图 1004×684）:
+**Mask 坐标**（基于新底图 1004×684，v6 hairDome 大幅扩大）:
 
-| 用途 | cx | cy | w | h | 附加 |
-|------|----|----|---|---|------|
-| 基础 | 170 | 235 | 100 | 166 | — |
-| api | 170 | 230 | 106 | 162 | — |
-| comp | 170 | 232 | 130 | 188 | solidTopH=20, solidTopInset=12, feather=8 |
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 170 | 230 | 120 | 190 | — | — |
+| api (hairDome) | 170 | 222 | 128 | 198 | domeH=84, expandX=18 | sideHair: 26×66 @ (56,76) |
+| comp (hairDome) | 170 | 224 | 162 | 238 | domeH=96, expandX=24 | sideHair: 34×82 @ (64,86), feather=12 |
 
-**Prompt 要点** (extraPromptLines, 10 条):
+**Prompt 要点** (extraPromptLines, 14 条):
 - Hairstyle source lock (HIGHEST PRIORITY), Hair length copy, Hair texture copy
-- Festival portrait fit, Female head scale, Center lock, Crown clearance
+- Crown clearance, Full hair rendering
+- Festival portrait fit, Female head scale, Center lock
 - Long-hair routing
 - Scene clothing preservation (CRITICAL), Source clothing exclusion
-- Single-head rule
+- Neck-clothing boundary (CRITICAL)
+- Single-head rule, Realism lock
 
-**Negative terms** (~18 条):
-- invented hairstyle, added hair length, extra hair volume
-- bob cut from short hair, different hairstyle, changed hair texture
+**Negative terms** (~35 条):
+- invented/changed hairstyle, bob from short, different texture
+- cropped crown, truncated hair, incomplete hair, half hair, shortened long hair
 - missing chin, blank mannequin neck
-- double face, residual mannequin head
-- oversized head, cropped crown
-- source photo clothing, user collar visible
-- reference shirt collar, wrong collar color
+- double face, residual mannequin head, oversized head
+- source photo clothing, user/reference collar, wrong collar color, collar bleeding, user neckline fabric
 - source top, reference clothing fabric, source photo background
-
-### 效果
-
-- **scene4 男**: faceswap-composite 解决了 inpaint 模式下远端边缘 100% 失败的问题
-- **scene4 女**: 0.65 strength + 扩大 mask 改善了面部覆盖
-- `素材/用户测试照片` 批量测试结果: 18/18 成功
+- cartoon/anime/cgi/doll/pixar/emoji face, oversized eyes, plastic skin, 3d render
 
 使用说明:
 
@@ -176,4 +181,4 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 4 -
 回滚说明:
 
 - 运行回滚: 指定 `--scene 4` 复跑当前配置。
-- 代码回滚: `git checkout 90e2519 -- scene-configs/scene4.js`
+- 代码回滚: `git checkout 78e9ce2 -- scene-configs/scene4.js`

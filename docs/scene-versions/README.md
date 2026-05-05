@@ -76,4 +76,4 @@
 
 自 2026-05-04 起建立版本更新制度。每次修改 `scene-configs/` 或生成脚本时，必须在 **[CHANGELOG.md](./CHANGELOG.md)** 中追加更新记录。详见 `scene-configs/README.md` 中的版本更新规范。
 
-**当前版本**: v1.3（Scene1/Scene4 后续迭代优化，含 hairDome + neck mask、faceswap-composite 模式）
+**当前版本**: v1.4（全场景统一升级：hairDome mask 统一化、refNormalize、validateHeadSwap、prompt 大幅扩充）

@@ -8,6 +8,7 @@ module.exports = {
     targetPerson: 'the person on the far left',
     refScale: 0.45, refAnchor: 'north', refOffsetY: 0.08,
     refCrop: { width: 0.72, height: 0.78, offsetX: 0.5, offsetY: 0.00 },
+    refNormalize: true,
     skipComposite: false, // 必须 composite：把原始底图 mask 外像素贴回，锁定背景
     validateHeadSwap: true,
     validationTarget: 'the person on the far left',
@@ -72,6 +73,7 @@ module.exports = {
     targetPerson: 'the person on the far left',
     refScale: 0.33, refAnchor: 'north', refOffsetY: 0.08,
     refCrop: { width: 0.68, height: 0.72, offsetX: 0.5, offsetY: 0.01 },
+    refNormalize: true,
     skipComposite: false,
     validateHeadSwap: true,
     validationTarget: 'the person on the far left',
