@@ -639,14 +639,22 @@ async function validateHeadSwapResult(resultBase64, sceneLabel, targetPerson = '
         {
           type: 'text',
           text:
-            `Validate this head-swap result for ${sceneLabel}. ` +
-            `Look only at ${targetPerson}. ` +
-            'Reply ONLY PASS if there is exactly one complete, realistic, visible human head and face attached naturally to the existing scene body, and only the head, hair, ears, and neck area were replaced. ' +
-            'Reply ONLY FAIL if the head is missing, blank, replaced by a dark block, mannequin patch, or if source-photo clothing, chest, shoulders, arms, hands, or source background were copied into the scene. ' +
+            'You are a quality inspector for head-swap composites. Validate the result for "' + sceneLabel + '". Focus on ' + targetPerson + '.\n\n' +
+            'Check ALL of the following criteria. Reply PASS only if EVERY criterion is met:\n' +
+            '1. HEAD COMPLETENESS: Exactly one complete human head visible from the top of the hair (crown) to the chin. No cropped crown, no missing jaw, no half-face.\n' +
+            '2. PHOTOREALISM: The face looks like a real photograph — NOT cartoon, anime, CGI, 3D render, doll, pixar-style, emoji, or plastic skin.\n' +
+            '3. SKIN CONTINUITY: Face/neck skin tone transitions naturally into the body skin. No visible color jump or seam at the neck.\n' +
+            '4. HAIR QUALITY: Hair is opaque, dense, and complete. No translucent hair, no bald patches, no faded crown, no invented hairstyle.\n' +
+            '5. CLOTHING PRESERVATION: Original scene clothing is preserved. No source-photo clothing, collar, or shirt leaked in.\n' +
+            '6. BACKGROUND PRESERVATION: Scene background intact. No source-photo background, room corner, or wall patch leaked in.\n' +
+            '7. HEAD PROPORTION: Head proportional to body — not oversized, not undersized, not floating.\n' +
+            '8. SINGLE HEAD: Exactly one face. No duplicate, no ghost face, no residual mannequin.\n\n' +
+            'If ANY criterion fails, reply "FAIL:" followed by a short reason (e.g., "FAIL:cartoon face", "FAIL:cropped crown", "FAIL:source clothing").\n' +
+            'If ALL criteria pass, reply "PASS".\n' +
             extraRule
         },
       ]}],
-      max_tokens: 4,
+      max_tokens: 30,
       temperature: 0,
     }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, timeout: 20000 });
 
@@ -766,11 +774,20 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       const leftHairCx = apiCx - sideOffsetX;
       const rightHairCx = apiCx + sideOffsetX;
       const hairCy = apiTop + sideOffsetY;
+      // Neck ellipse for skin-tone blending
+      let neckSvgAPI = '';
+      if (mask.apiNeckRx && mask.apiNeckRy) {
+        const neckRx = Math.max(1, Math.round(mask.apiNeckRx * scaleX));
+        const neckRy = Math.max(1, Math.round(mask.apiNeckRy * scaleY));
+        const neckCy = apiTop + Math.round((mask.apiNeckOffsetY ?? apiH * 0.8) * scaleY);
+        neckSvgAPI = `<ellipse cx="${apiCx}" cy="${neckCy}" rx="${neckRx}" ry="${neckRy}" fill="white"/>`;
+      }
       svgAPI = `<svg width="${outputW}" height="${outputH}">` +
         `<ellipse cx="${apiCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
         `<rect x="${apiLeft}" y="${bodyTop}" width="${apiW}" height="${bodyH}" fill="white"/>` +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+        neckSvgAPI +
         `</svg>`;
     }
     const apiBuf = await sharp({ create: { width: outputW, height: outputH, channels: 3, background: { r: 0, g: 0, b: 0 } } })
@@ -787,8 +804,16 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
     const feather = mask.compFeather
       ? Math.max(8, Math.round(mask.compFeather * Math.min(scaleX, scaleY)))
       : Math.max(12, Math.round(Math.min(compW, compH) * 0.075));
+    const solidTopH = Math.min(compH, Math.max(0, Math.round((mask.compSolidTopH ?? 0) * scaleY)));
+    const solidTopInset = Math.max(0, Math.round((mask.compSolidTopInset ?? 0) * scaleX));
     let svgComp = `<svg width="${outputW}" height="${outputH}">` +
-      `<rect x="${compLeft}" y="${compTop}" width="${compW}" height="${compH}" fill="white"/></svg>`;
+      `<rect x="${compLeft}" y="${compTop}" width="${compW}" height="${compH}" fill="white"/>`;
+    if (solidTopH > 0) {
+      const solidX = compLeft + solidTopInset;
+      const solidW = Math.max(1, compW - solidTopInset * 2);
+      svgComp += `<rect x="${solidX}" y="${compTop}" width="${solidW}" height="${solidTopH}" fill="white"/>`;
+    }
+    svgComp += `</svg>`;
     if (mask.compShape === 'hairDome') {
       const domeH = Math.max(1, Math.round((mask.compDomeH ?? Math.round(mask.compH * 0.32)) * scaleY));
       const domeExpandX = Math.max(0, Math.round((mask.compDomeExpandX ?? 0) * scaleX));
@@ -803,11 +828,20 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       const leftHairCx = compCx - sideOffsetX;
       const rightHairCx = compCx + sideOffsetX;
       const hairCy = compTop + sideOffsetY;
+      // Neck ellipse for skin-tone blending
+      let neckSvgComp = '';
+      if (mask.compNeckRx && mask.compNeckRy) {
+        const neckRx = Math.max(1, Math.round(mask.compNeckRx * scaleX));
+        const neckRy = Math.max(1, Math.round(mask.compNeckRy * scaleY));
+        const neckCy = compTop + Math.round((mask.compNeckOffsetY ?? compH * 0.8) * scaleY);
+        neckSvgComp = `<ellipse cx="${compCx}" cy="${neckCy}" rx="${neckRx}" ry="${neckRy}" fill="white"/>`;
+      }
       svgComp = `<svg width="${outputW}" height="${outputH}">` +
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
         `<rect x="${compLeft}" y="${bodyTop}" width="${compW}" height="${bodyH}" fill="white"/>` +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
+        neckSvgComp +
         `</svg>`;
     }
     const compRaw = await sharp({ create: { width: outputW, height: outputH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
@@ -833,11 +867,20 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       const hairCy = compTop + sideOffsetY;
       const innerSideRx = Math.max(1, sideRx - Math.round(feather * 0.25));
       const innerSideRy = Math.max(1, sideRy - Math.round(feather * 0.2));
+      // Inner neck ellipse for solid core (prevent over-feathering at neck)
+      let neckSvgSolid = '';
+      if (mask.compNeckRx && mask.compNeckRy) {
+        const innerNeckRx = Math.max(1, Math.round((mask.compNeckRx - feather * 0.35) * scaleX));
+        const innerNeckRy = Math.max(1, Math.round((mask.compNeckRy - feather * 0.3) * scaleY));
+        const innerNeckCy = compTop + Math.round((mask.compNeckOffsetY ?? compH * 0.8) * scaleY);
+        neckSvgSolid = `<ellipse cx="${compCx}" cy="${innerNeckCy}" rx="${innerNeckRx}" ry="${innerNeckRy}" fill="white"/>`;
+      }
       const svgSolidHair = `<svg width="${outputW}" height="${outputH}">` +
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${innerTopRx}" ry="${innerTopRy}" fill="white"/>` +
         `<rect x="${compLeft + bodyInset}" y="${bodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>` +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
+        neckSvgSolid +
         `</svg>`;
       compBuf = await sharp(compBuf)
         .composite([{ input: Buffer.from(svgSolidHair), blend: 'over' }])
@@ -845,18 +888,6 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
         .toBuffer();
       console.log(`    comp mask -> hairDome (${compLeft},${compTop}) ${compW}x${compH} feather=${feather}`);
       return { apiBuf, compBuf, cx: mcx, cy: mcy };
-    }
-    const solidTopH = Math.min(compH, Math.max(0, Math.round((mask.compSolidTopH ?? 0) * scaleY)));
-    const solidTopInset = Math.max(0, Math.round((mask.compSolidTopInset ?? 0) * scaleX));
-    if (solidTopH > 0) {
-      const solidX = compLeft + solidTopInset;
-      const solidW = Math.max(1, compW - solidTopInset * 2);
-      const svgSolidTop = `<svg width="${outputW}" height="${outputH}">` +
-        `<rect x="${solidX}" y="${compTop}" width="${solidW}" height="${solidTopH}" fill="white"/></svg>`;
-      compBuf = await sharp(compBuf)
-        .composite([{ input: Buffer.from(svgSolidTop), blend: 'over' }])
-        .png()
-        .toBuffer();
     }
 
     console.log(`    api mask -> ${mask.apiShape === 'hairDome' ? 'hairDome' : 'rect'} (${apiLeft},${apiTop}) ${apiW}x${apiH} (${outputW}x${outputH})`);
@@ -1459,21 +1490,32 @@ async function runPhotoAllScenes({ photoPath, sceneIds, forceGender, outputDir =
         console.warn(`  [retry] 场景${sceneId} ${conf.label} 切换参考图重试 -> ${referenceVariants[idx + 1].label}`);
       }
     } else if (conf.mode === 'faceswap-composite') {
-      // Hybrid 模式：faceswap 生成 + post-composite 锁背景
-      const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
-        ? await toScaledReferenceDataUrl(
-            photoPath,
-            conf.refScale,
-            conf.refAnchor || 'center',
-            conf.refOffsetX ?? 0.5,
-            conf.refOffsetY
-          )
-        : userBase64;
-      r = await runFaceswapCompositeTest({
-        photoTag, sceneId, conf,
-        templatePath, templateW: meta.width, templateH: meta.height,
-        userBase64: sceneUserBase64, userDescription, gender, outputDir,
-      });
+      // Hybrid 模式：faceswap 生成 + post-composite 锁背景（支持 LLM 校验失败后自动重试）
+      const baseStrength = conf.strength ?? 0.50;
+      const strengthSteps = [baseStrength];
+      if (baseStrength < 0.60) strengthSteps.push(Math.min(0.65, baseStrength + 0.08));
+      if (baseStrength < 0.55) strengthSteps.push(Math.min(0.70, baseStrength + 0.16));
+      for (let si = 0; si < strengthSteps.length; si++) {
+        const retryConf = si === 0 ? conf : { ...conf, strength: strengthSteps[si] };
+        const sceneUserBase64 = (retryConf.refScale && retryConf.refScale < 0.999)
+          ? await toScaledReferenceDataUrl(
+              photoPath,
+              retryConf.refScale,
+              retryConf.refAnchor || 'center',
+              retryConf.refOffsetX ?? 0.5,
+              retryConf.refOffsetY
+            )
+          : userBase64;
+        r = await runFaceswapCompositeTest({
+          photoTag, sceneId, conf: retryConf,
+          templatePath, templateW: meta.width, templateH: meta.height,
+          userBase64: sceneUserBase64, userDescription, gender, outputDir,
+        });
+        if (r.status === 'ok') break;
+        if (si < strengthSteps.length - 1) {
+          console.warn(`  [retry] 场景${sceneId} faceswap strength ${strengthSteps[si].toFixed(2)}→${strengthSteps[si + 1].toFixed(2)} 重试`);
+        }
+      }
     } else {
       const sceneUserBase64 = (conf.refScale && conf.refScale < 0.999)
         ? await toScaledReferenceDataUrl(

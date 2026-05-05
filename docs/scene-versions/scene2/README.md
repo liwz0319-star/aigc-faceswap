@@ -116,3 +116,80 @@ node .\test-faceswap-new-scenes.js "生成测试\照片\xxx.jpg" --scene 2
 
 - 运行回滚: 直接用该脚本独立复跑，不影响版本 4。
 - 代码回滚: 恢复 `test-faceswap-new-scenes.js`。
+
+## 版本 6: 当前配置版本（v1.0 基线 + hairDome mask）
+
+- 配置文件: [scene-configs/scene2.js](../../scene-configs/scene2.js)
+- 运行脚本: [test-faceswap-inpaint-scenes.js](../../test-faceswap-inpaint-scenes.js)
+- 模式: `inpaint` + `post-composite`
+- 关联 commit: `871299d` ~ `0efb202`（v1.0 基线）
+
+### 与版本 4 的主要差异
+
+1. **男版**: 参数基本不变，仍为矩形 mask + inpaint，无 refScale（使用完整参考图）
+2. **女版**: 新增 `hairDome` mask 形状，带 sideHair 覆盖长发；新增精细 prompt（18 条）和 negative terms（~40 条）
+
+### Scene 2 男
+
+| 参数 | 值 |
+|------|----|
+| 底图 | `场景2.png` |
+| 尺寸 | 2048×2560 |
+| guidance | 10 |
+| refScale | 无（直接使用完整参考图） |
+
+**Mask 坐标**:
+
+| 用途 | cx | cy | w | h | 附加 |
+|------|----|----|---|---|------|
+| 基础 | 360 | 174 | 162 | 236 | — |
+| api | 360 | 158 | 128 | 228 | — |
+| comp | 360 | 174 | 162 | 236 | solidTopH=68 |
+
+### Scene 2 女
+
+| 参数 | 值 |
+|------|----|
+| 底图 | `场景2.png` |
+| 尺寸 | 2048×2560 |
+| guidance | 10 |
+| refScale | 0.30 |
+| refAnchor | north |
+| refOffsetY | 0.06 |
+
+**Mask 坐标**:
+
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 360 | 158 | 150 | 246 | — | — |
+| api (hairDome) | 394 | 134 | 196 | 218 | domeH=82, expandX=16 | sideHair: 24×58 @ (78,138) |
+| comp (hairDome) | 396 | 146 | 220 | 248 | domeH=92, expandX=20 | sideHair: 30×74 @ (86,150), feather=10 |
+
+**Prompt 要点** (extraPromptLines, 18 条):
+- Flag portrait fit, Female head scale, Center lock, Vertical lock, Crown clearance
+- Hairstyle source lock, Bang rule, Hair state lock
+- Close-selfie handling, Full-head completion, Realism lock
+- Jersey preservation, Shoulder protection
+- Long-hair routing, Right-ear visibility, Hair silhouette, Right-side coverage
+- Patch suppression, Background lock
+
+**Negative terms** (~40 条):
+- oversized/giant head, off-center/shifted head, cropped crown
+- invented bangs/curtain bangs, tied-up from loose source
+- cartoon/avatar/doll/cgi face
+- missing right ear, missing right-side hair
+- literal selfie crop, source image patch
+- face inside flag, hair curtain over flag
+- altered jersey collar, source photo background/corner
+
+使用说明:
+
+```powershell
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 2
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 2 --gender female --outdir "生成测试\新底图2"
+```
+
+回滚说明:
+
+- 运行回滚: 指定 `--scene 2` 复跑当前配置即可。
+- 代码回滚: `git checkout 0efb202 -- scene-configs/scene2.js`

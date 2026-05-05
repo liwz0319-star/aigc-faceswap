@@ -82,3 +82,111 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1 -
 
 - 运行回滚: 指定 `--scene 1` 即可只跑场景 1。
 - 代码回滚: 由于该脚本同时影响 `scene1/scene2/scene4`，回滚前要确认不会误伤其它场景。
+
+## 版本 5: 当前配置版本（v1.1+ 迭代优化）
+
+- 配置文件: [scene-configs/scene1.js](../../scene-configs/scene1.js)
+- 共用 profile: `scene1_portrait`（[profiles.js](../../scene-configs/profiles.js)）
+- 运行脚本: [test-faceswap-inpaint-scenes.js](../../test-faceswap-inpaint-scenes.js)
+- 模式: `inpaint` + `post-composite`
+- 关联 commit: `90e2519` 及后续迭代
+
+### 与版本 4 的主要差异
+
+1. **mask 从矩形改为 hairDome + neck 覆盖**: 新增 `apiNeckRx/apiNeckRy` 参数，贴合颈线，避免裁切
+2. **大幅精简 prompt/negative terms**: 男版 17→7 条 prompt，~40→13 条 negative；女版 30→12 条 prompt，~55→18 条 negative
+3. **refScale 收紧**: 男版 0.38→0.30，女版 0.30→0.24，减小参考图比例避免头部过大
+4. **scene1_portrait profile 精简**: 去除适得其反的 skin transition prompt，7→4 条
+
+### Scene 1 男
+
+| 参数 | 值 |
+|------|----|
+| 底图 | `场景1男.jpg` |
+| 尺寸 | 2048×2560 |
+| guidance | 10 |
+| refScale | 0.30 |
+| refAnchor | north |
+| refOffsetY | 0.08 |
+| refScaleCandidates | [0.30, 0.36] |
+| includeOriginalReferenceFallback | true |
+| validateHeadSwap | true |
+
+**Mask 坐标**:
+
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 1140 | 844 | 136 | 230 | — | — |
+| api (hairDome) | 1142 | 832 | 144 | 253 | domeH=93, expandX=13 | sideHair: 18×50 @ (67,118), neck: rx=112, ry=136 @ offsetY=176 |
+| comp (hairDome) | 1142 | 840 | 163 | 270 | domeH=99, expandX=16 | sideHair: 22×62 @ (74,128), neck: rx=128, ry=152 @ offsetY=184, feather=11 |
+
+**Prompt 要点** (extraPromptLines, 7 条):
+- Compact portrait fit, Crown clearance
+- Jaw completion, No mannequin carry-over
+- Single-head rule, Neck edge clarity
+- Background consistency
+
+**Negative terms** (13 条):
+- half face, cropped crown, top-clipped hair
+- double face, residual mannequin head
+- missing chin, blank mannequin neck
+- blurry neck, foggy neck edge
+- dark head hole, black face void
+- cartoon face, doll face, oversized eyes
+
+### Scene 1 女
+
+| 参数 | 值 |
+|------|----|
+| 底图 | `场景1女.jpg` |
+| 尺寸 | 2048×2560 |
+| guidance | 10 |
+| refScale | 0.24 |
+| refAnchor | north |
+| refOffsetY | 0.08 |
+| refScaleCandidates | [0.24, 0.30] |
+| refAlwaysSoftOval | true |
+
+**Mask 坐标**:
+
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 1140 | 846 | 131 | 226 | — | — |
+| api (hairDome) | 1142 | 832 | 144 | 250 | domeH=101, expandX=16 | sideHair: 26×78 @ (75,128), neck: rx=104, ry=132 @ offsetY=176 |
+| comp (hairDome) | 1142 | 840 | 166 | 280 | domeH=104, expandX=18 | sideHair: 30×101 @ (83,141), neck: rx=120, ry=148 @ offsetY=184, feather=12 |
+
+**Prompt 要点** (extraPromptLines, 12 条):
+- Compact portrait fit, Crown clearance
+- Hairstyle source lock, Bang rule
+- Close-selfie handling, Long-hair routing, Shoulder clearance
+- Jaw completion, No mannequin carry-over
+- Single-head rule, Neck edge clarity, Background consistency
+
+**Negative terms** (18 条):
+- half face, cropped crown, top-clipped hair
+- double face, residual mannequin head
+- invented bangs, ponytail from down hair
+- long hair over center chest, hair covering beer glass
+- blurry neck, missing chin, blank mannequin neck
+- dark head hole, black face void
+- literal selfie crop, source image patch
+- cartoon face, doll face, oversized eyes
+
+### 共用 profile (scene1_portrait)
+
+| 参数 | 值 |
+|------|----|
+| promptLines | 4 条: Head swap framing, Head size lock, Realism lock, Neck blend |
+| negativeTerms | 5 条: half face, cropped forehead/chin, off-center face, cartoon/anime/cgi/doll face, oversized eyes |
+
+使用说明:
+
+```powershell
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 1 --gender female --outdir "生成测试\新底图1"
+```
+
+回滚说明:
+
+- 运行回滚: 指定 `--scene 1` 复跑当前配置即可。
+- 代码回滚: `git checkout 90e2519 -- scene-configs/scene1.js scene-configs/profiles.js`

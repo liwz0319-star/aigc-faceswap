@@ -2,6 +2,9 @@ module.exports = {
   male: {
     file: '场景2.png', label: '场景2（球场举旗）',
     mode: 'inpaint', size: '2048x2560', guidance: 10,
+    validateHeadSwap: true,
+    validationTarget: 'the main swapped person behind the flag',
+    validationRule: 'The head must be centered above the neck behind the flag. The flag letters and Bayern jersey must be completely preserved.',
     mask: {
       cx: 360, cy: 174, w: 162, h: 236,
       apiCx: 360, apiCy: 158, apiW: 128, apiH: 228,
@@ -13,6 +16,9 @@ module.exports = {
     file: '场景2.png', label: '场景2（球场举旗）',
     mode: 'inpaint', size: '2048x2560', guidance: 10,
     refScale: 0.30, refAnchor: 'north', refOffsetY: 0.06,
+    validateHeadSwap: true,
+    validationTarget: 'the main swapped person behind the flag',
+    validationRule: 'The female head must be compact and not oversized. Full crown visible. Flag letters preserved. Right ear and side hair preserved.',
     extraPromptLines: [
       'Flag portrait fit: Keep the inserted female head compact, upright, and centered above the neck opening behind the flag.',
       'Female head scale: Keep the female head modest and slightly smaller than the placeholder width. Do NOT enlarge the face to fill the whole replacement box.',
@@ -30,6 +36,7 @@ module.exports = {
       'Long-hair routing: If Image 2 has medium or long hair, let the longer side hair continue beside the face and then fall behind the shoulders or behind the flag. Do NOT let a flat hair curtain cover the front flag letters.',
       'Right-ear visibility: Preserve the full viewer-right ear when it exists in Image 2. Do NOT hide, crop, or blur away the viewer-right ear.',
       'Hair silhouette: Preserve the outer hair contour on the viewer-right side of the head. Do NOT blur away or trim the loose side hair near the ear and shoulder.',
+      'Maximum head size: The head width must NOT exceed the original placeholder width. If the reference face appears large, scale it DOWN to fit naturally — a slightly small head is better than an oversized one.',
       'Right-side coverage: Fully include the viewer-right temple, ear, side hair, and the adjacent outer hair contour inside the replacement area.',
       'Patch suppression: The replacement area must contain only the head, hair, ears, and natural neck transition. Do NOT expose any source-photo wall, ceiling, room corner, or rectangular background patch.',
       'Background lock: Do NOT bring any source-photo wall, ID-photo backdrop, or indoor background into Image 1.',

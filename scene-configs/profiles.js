@@ -9,12 +9,14 @@ module.exports = {
     promptLines: [
       'Head swap framing: Replace the full placeholder head from crown to chin, not just the center face. Keep the full forehead, both cheeks, jawline, and chin visible.',
       'Head size lock: Match the original player head size in Image 1. Do NOT make the head oversized relative to the shoulders or torso.',
-      'Realism lock: The face must remain a real photographic human face. No cartoon, no CGI, no doll-like stylization, and no oversized eyes.',
+      'Realism lock: The face must remain a real photographic human face with natural skin texture. No cartoon, no CGI, no doll-like stylization, no oversized eyes, no plastic skin.',
       'Neck blend: Generate a natural jaw-to-neck transition that dissolves smoothly into the collar opening.',
     ],
     negativeTerms: [
       'half face', 'cropped forehead', 'cropped chin', 'off-center face',
-      'cartoon face', 'anime face', 'cgi face', 'doll face', 'oversized eyes',
+      'cartoon face', 'cartoon avatar', 'anime face', 'cgi face', '3d avatar',
+      'pixar face', 'emoji face', 'doll face', 'toy face', 'oversized eyes',
+      'plastic skin', '3d render face',
     ],
   },
   scene4_festival: {
@@ -28,7 +30,7 @@ module.exports = {
       'Single-head rule: Generate exactly one aligned head centered on the placeholder neck. Do NOT create a second face beside the placeholder.',
       'Background blend: Preserve the original sky and tree colors from Image 1 and blend the head edge naturally into the background.',
       'Head size lock: Match the original footballer head size in Image 1. The inserted head must stay proportional to the shoulders and torso.',
-      'Realism lock: The face must remain a real photographic human face. No cartoon, no CGI, no doll-like stylization, and no oversized eyes.',
+      'Realism lock: The face must remain a real photographic human face with natural skin texture. No cartoon, no CGI, no doll-like stylization, no oversized eyes, no plastic skin.',
     ],
     negativeTerms: [
       'missing chin', 'melted lower face', 'blank mannequin neck', 'placeholder skin', 'unfinished jawline',
@@ -36,7 +38,9 @@ module.exports = {
       'double face', 'duplicate face', 'adjacent face', 'offset face', 'residual mannequin head',
       'oversized head', 'giant head', 'tiny body large head',
       'rectangular crop edge', 'visible box edge', 'background patch edge',
-      'cartoon face', 'anime face', 'cgi face', '3d render face', 'doll face', 'toy face', 'oversized eyes', 'plastic skin',
+      'cartoon face', 'cartoon avatar', 'anime face', 'cgi face', '3d avatar',
+      'pixar face', 'emoji face', 'doll face', 'toy face', 'oversized eyes',
+      'plastic skin', '3d render face',
     ],
   },
 };

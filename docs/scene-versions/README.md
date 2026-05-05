@@ -11,12 +11,15 @@
 
 ## 目录结构
 
-- [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md)
-- [current-flow-2026-05-04.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-04.md)
-- [scene1/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene1\README.md)
-- [scene2/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene2\README.md)
-- [scene3/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene3\README.md)
-- [scene4/README.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\scene4\README.md)
+- **[CHANGELOG.md](./CHANGELOG.md)** — **版本更新日志（每次修改必更新）**
+- [current-flow-2026-05-01.md](./current-flow-2026-05-01.md)
+- [current-flow-2026-05-04.md](./current-flow-2026-05-04.md)
+- [scene1/README.md](./scene1/README.md)
+- [scene2/README.md](./scene2/README.md)
+- [scene3/README.md](./scene3/README.md)
+- [scene4/](./scene4/)
+  - [README.md](./scene4/README.md)
+  - [2026-05-04-head-reference-fix.md](./scene4/2026-05-04-head-reference-fix.md)
 
 ## 场景配置拆分
 
@@ -57,14 +60,20 @@
 - [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md)
 - [current-flow-2026-05-04.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-04.md)
 
-鏈€鏂扮殑 `scene4` 淇蹇収鏄?`current-flow-2026-05-04.md`锛屽叧閿彉鏇村寘鎷?:
+最新的 `scene4` 修复快照见 `current-flow-2026-05-04.md`，关键变更包括:
 
-- `scene4` 鍙傝€冨浘鏀逛负鈥滃ご鑲╁弬鑰冣€?
-- 鐢风増淇濈暀鑷姩缁撴灉鏍￠獙
-- 濂崇増鏀剁揣 `refCrop` 鍜?mask锛屾殏鏃朵笉鍚敤鑷姩鏍￠獙
-- `素材/用户测试照片` 瀵?`scene4` 鐨勬渶鏂版壒閲忕粨鏋滄槸 `18/18` 鎴愬姛
+- `scene4` 参考图改为"头肩参考"
+- 男版保留自动结果校验
+- 女版收紧 `refCrop` 和 mask，暂不启用自动校验
+- `素材/用户测试照片` 对 `scene4` 的最新批量结果是 `18/18` 成功
 
 其中对应的已提交 commit：
 
 - `9a4703e` `restore old scene2 inpaint workflow`
 - `2f37d28` `add restored workflow notes`
+
+## 版本更新规范
+
+自 2026-05-04 起建立版本更新制度。每次修改 `scene-configs/` 或生成脚本时，必须在 **[CHANGELOG.md](./CHANGELOG.md)** 中追加更新记录。详见 `scene-configs/README.md` 中的版本更新规范。
+
+**当前版本**: v1.3（Scene1/Scene4 后续迭代优化，含 hairDome + neck mask、faceswap-composite 模式）

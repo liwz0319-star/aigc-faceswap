@@ -90,3 +90,99 @@ node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 3 -
 
 - 运行回滚: 直接指定 `--scene 3` 复跑当前版本。
 - 代码回滚: 如果后续继续调坏，优先恢复 [current-flow-2026-05-01.md](F:\AAA Work\AIproject\demo\球星球迷合照\docs\scene-versions\current-flow-2026-05-01.md) 对应提交里的 `test-faceswap-inpaint-scenes.js`。
+
+## 版本 5: 当前配置版本（v1.2 inpaint + hairDome mask 优化）
+
+- 配置文件: [scene-configs/scene3.js](../../scene-configs/scene3.js)
+- 运行脚本: [test-faceswap-inpaint-scenes.js](../../test-faceswap-inpaint-scenes.js)
+- 模式: `inpaint` + `post-composite`
+- 关联 commit: v1.2 变更（包含在 `90e2519` 中）
+
+### 与版本 4 的主要差异
+
+1. **从 faceswap-composite 回退为 inpaint**: faceswap-composite 模式导致背景色彩偏移、AI 水印残留、脖子两截色三个问题，回退 inpaint 后 AI 能看到 mask 外原始像素并主动匹配
+2. **mask 从矩形改为 hairDome**: 贴合头冠弧度，覆盖更完整（男版新增 domeH=120/128）
+3. **女版 refScale 增大 40%**: 0.20→0.28，改善面部生成质量
+4. **prompt 精简**: 男版 10→12 条（新增 jaw/skin tone），女版 20→12 条
+5. **新增 skin tone continuity prompt**: 防止脖子与肩膀两截色
+6. **新增 negative terms**: missing chin, melted lower face, dark head hole, black face void 等
+
+### Scene 3 男
+
+| 参数 | 值 |
+|------|----|
+| 底图 | `场景3.jpg` |
+| 尺寸 | 2560×1536（横版） |
+| guidance | 10 |
+| refScale | 0.36 |
+| refAnchor | north |
+| refOffsetY | 0.05 |
+| refSoftOvalOnFlatBackground | true |
+
+**Mask 坐标**:
+
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 934 | 280 | 214 | 394 | — | — |
+| api (hairDome) | 934 | 260 | 190 | 362 | domeH=120, expandX=14 | sideHair: 18×60 @ (86,148) |
+| comp (hairDome) | 934 | 264 | 236 | 406 | domeH=128, expandX=16 | sideHair: 22×74 @ (94,158), feather=12 |
+
+**Prompt 要点** (extraPromptLines, 12 条):
+- Tunnel portrait fit, Head size lock, Template size lock
+- Center lock, Vertical lock, Neck seat lock, Crown clearance
+- Jaw completion, Full-head completion, Skin tone continuity
+- Patch suppression, Background lock
+
+**Negative terms** (~20 条):
+- oversized/giant/bobblehead head, off-center/shifted head
+- cropped crown, missing chin, melted lower face, blank mannequin neck
+- face inside jersey, dark head hole, black face void
+- source photo corner/background, cartoon/anime/cgi/doll face
+
+### Scene 3 女
+
+| 参数 | 值 |
+|------|----|
+| 底图 | `场景3.jpg` |
+| 尺寸 | 2560×1536（横版） |
+| guidance | 10 |
+| refScale | 0.28 |
+| refAnchor | north |
+| refOffsetY | 0.04 |
+| refCrop | width=0.72, height=0.88, offsetX=0.5, anchor=north, offsetY=0.0 |
+| refAlwaysSoftOval | true |
+| refSoftOvalOnFlatBackground | true |
+
+**Mask 坐标**:
+
+| 用途 | cx | cy | w | h | 形状 | 附加参数 |
+|------|----|----|---|---|------|---------|
+| 基础 | 934 | 298 | 202 | 404 | — | — |
+| api (hairDome) | 934 | 274 | 194 | 390 | domeH=100, expandX=12 | sideHair: 20×68 @ (90,164) |
+| comp (hairDome) | 934 | 278 | 236 | 434 | domeH=108, expandX=14 | sideHair: 24×84 @ (98,184), feather=12 |
+
+**Prompt 要点** (extraPromptLines, 12 条):
+- Tunnel portrait fit, Female head scale, Center lock, Vertical lock
+- Crown clearance, Hairstyle source lock, Long-hair routing
+- Full-head completion, Jaw completion, Skin tone continuity
+- Patch suppression, Background lock
+
+**Negative terms** (~15 条):
+- oversized female head, bobblehead proportions, cropped crown
+- missing chin, melted lower face, blank mannequin neck
+- literal selfie crop, stiff side hair strip
+- dark head hole, black face void
+- source photo background, indoor wall patch
+- long hair over front jersey, cartoon/anime/cgi/doll face
+
+使用说明:
+
+```powershell
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 3
+node .\test-faceswap-inpaint-scenes.js "生成测试\照片\xxx.jpg" --scene 3 --gender female --outdir "生成测试\scene3_check"
+```
+
+回滚说明:
+
+- 运行回滚: 指定 `--scene 3` 复跑当前配置即可。
+- 代码回滚: `git checkout 90e2519 -- scene-configs/scene3.js`
