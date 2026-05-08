@@ -30,6 +30,27 @@ function buildFaceswapPrompt(options = {}) {
     ? `Additional appearance cues from Image 2: ${userDescription}`
     : '';
 
+  // 从外貌描述中提取发型关键词，构建发型锁定 prompt
+  let hairstyleLockLine = '';
+  if (userDescription && gender === 'male') {
+    const desc = userDescription.toLowerCase();
+    const hasShortHair = desc.includes('short hair') || desc.includes('buzz') || desc.includes('crew') || desc.includes('fade') || desc.includes('cropped') || desc.includes('close-cropped') || desc.includes('clean-shaven');
+    const hasNoBangs = desc.includes('no bangs') || desc.includes('exposed forehead') || desc.includes('receding') || desc.includes('bald');
+    const hairKeywords = [];
+    if (desc.includes('black hair')) hairKeywords.push('black');
+    else if (desc.includes('dark hair')) hairKeywords.push('dark');
+    else if (desc.includes('brown hair')) hairKeywords.push('brown');
+    if (desc.includes('straight hair')) hairKeywords.push('straight');
+    else if (desc.includes('wavy hair')) hairKeywords.push('wavy');
+    else if (desc.includes('curly hair')) hairKeywords.push('curly');
+
+    if (hasShortHair || hasNoBangs) {
+      hairstyleLockLine = `REFERENCE HAIRSTYLE (ABSOLUTE LOCK): Image 2 shows a MALE with ${hasShortHair ? 'SHORT masculine hair' : 'hair'}. ${hasNoBangs ? 'The forehead is EXPOSED with NO bangs.' : ''} You MUST reproduce this EXACT short masculine hairstyle. Do NOT add bangs, fringe, or length. Do NOT generate a bob cut, bowl cut, pixie cut, or any feminine hairstyle.`;
+    } else if (hairKeywords.length > 0) {
+      hairstyleLockLine = `REFERENCE HAIRSTYLE: Image 2 shows ${hairKeywords.join(', ')} hair. Copy the EXACT hairstyle from Image 2 — same length, same texture, same fringe status.`;
+    }
+  }
+
   // 性别锁定
   const genderLockLine = gender === 'male'
     ? 'GENDER LOCK (MANDATORY): The person is MALE. Reproduce MALE facial structure, MALE hairstyle, and MALE appearance from Image 2. Do NOT generate feminine face shape, feminine hairstyle, or any female facial features.'
@@ -72,6 +93,7 @@ function buildFaceswapPrompt(options = {}) {
       `Fill the blank oval with the face of the person from Image 2: their facial structure, eyes, nose, lips, skin tone, hairline, hairstyle, and hair length.`,
       appearanceLine,
       hairstyleRules,
+      hairstyleLockLine,
       genderLockLine,
       '- If Image 2 shows glasses, add those. If not, no glasses.',
       '- Do not beautify or alter the face identity from Image 2.',
@@ -111,6 +133,7 @@ function buildFaceswapPrompt(options = {}) {
       '- Preserve the identity from Image 2: facial structure, face width, jawline, eye shape, eye openness, nose, lips, skin tone, hairline, hairstyle, hair length, glasses, and age presentation.',
       '- Replace the entire visible head identity of the target person, not just the inner face area.',
       hairstyleRules,
+      hairstyleLockLine,
       genderLockLine,
       '- Do not beautify, feminize, masculinize, cartoonize, or generate a random similar-looking person.',
       '- If Image 2 shows glasses, keep those glasses. If Image 2 does NOT show glasses, do not add glasses.',
@@ -144,6 +167,9 @@ function buildFaceswapPrompt(options = {}) {
     'low quality, watermark, text overlay,',
     'wrong hairstyle, wrong hair length, wrong hairline, bowl cut, blunt bowl fringe, straight across fringe,',
     'center parted hair, middle part, neat cap-like haircut, generic asian bowl cut, flat uniform fringe,',
+    'feminine bob on male, pixie cut on male, soft layers on male, curtain bangs on male, straight bangs on male,',
+    'page boy cut, mushroom cut, helmet hair, cap-shaped hair, rounded fringe on male, baby bangs,',
+    'hair covering forehead when reference shows no bangs, added bangs, invented fringe, hair lengthened from source,',
     'missing glasses, wrong glasses, added glasses when reference has none,',
     'feminine face when reference is masculine, masculine face when reference is feminine,',
     'oversized head, enlarged head, big head, huge head, disproportionate head, head larger than original, head larger than body, head too big, zoomed in face, face too close, face filling frame, head overflowing, face extending beyond oval,',

@@ -58,6 +58,9 @@ app.use((req, res, next) => {
 // ─── 路由 ───
 app.use('/static', require('express').static('/www/wwwroot/bayern-fan-photo'));
 app.use('/public', require('express').static('/www/wwwroot/bayern-fan-photo/server/public'));
+// 新场景底图静态路由（scene-configs 引用的底图 URL）
+// 使用 ASCII 路径 /templates 映射到中文目录，避免 URL 编码问题
+app.use('/templates', require('express').static('/www/wwwroot/bayern-fan-photo/新场景底图'));
 app.use('/api/v1/synthesis', synthesisRouter);
 
 // 健康检查

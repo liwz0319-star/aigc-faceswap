@@ -38,8 +38,11 @@ async function overlayDebug(gender) {
   // hairDome dome
   const domeH = Math.round(mask.apiDomeH * sy);
   const domeExpandX = Math.round(mask.apiDomeExpandX * sx);
+  const bodyInsetX = Math.round((mask.apiBodyInsetX || 0) * sx);
   const bodyTop = apiTop + Math.round(domeH * 0.52);
   const bodyH = Math.max(1, apiTop + apiH - bodyTop);
+  const bodyLeft = apiLeft + bodyInsetX;
+  const bodyW = Math.max(1, apiW - bodyInsetX * 2);
   const topRx = Math.round(apiW / 2) + domeExpandX;
   const topCy = apiTop + domeH;
 
@@ -65,7 +68,7 @@ async function overlayDebug(gender) {
   }
 
   const svg = `<svg width="${outW}" height="${outH}">
-    <rect x="${apiLeft}" y="${bodyTop}" width="${apiW}" height="${bodyH}" fill="rgba(0,0,255,0.2)" stroke="blue" stroke-width="1"/>
+    <rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="rgba(0,0,255,0.2)" stroke="blue" stroke-width="1"/>
     <ellipse cx="${apiCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="rgba(255,0,0,0.15)" stroke="red" stroke-width="1"/>
     <ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="rgba(255,165,0,0.2)" stroke="orange" stroke-width="1"/>
     <ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="rgba(255,165,0,0.2)" stroke="orange" stroke-width="1"/>
@@ -82,8 +85,11 @@ async function overlayDebug(gender) {
 
   const compDomeH = Math.round(mask.compDomeH * sy);
   const compDomeExpandX = Math.round(mask.compDomeExpandX * sx);
+  const compBodyInsetX = Math.round((mask.compBodyInsetX || 0) * sx);
   const compBodyTop = compTop + Math.round(compDomeH * 0.55);
   const compBodyH = Math.max(1, compTop + compH - compBodyTop);
+  const compBodyLeft = compLeft + compBodyInsetX;
+  const compBodyW = Math.max(1, compW - compBodyInsetX * 2);
   const compTopRx = Math.round(compW / 2) + compDomeExpandX;
   const compTopCy = compTop + compDomeH;
 
@@ -105,7 +111,7 @@ async function overlayDebug(gender) {
   }
 
   const svgComp = `<svg width="${outW}" height="${outH}">
-    <rect x="${compLeft}" y="${compBodyTop}" width="${compW}" height="${compBodyH}" fill="none" stroke="purple" stroke-width="1" stroke-dasharray="4,4"/>
+    <rect x="${compBodyLeft}" y="${compBodyTop}" width="${compBodyW}" height="${compBodyH}" fill="none" stroke="purple" stroke-width="1" stroke-dasharray="4,4"/>
     <ellipse cx="${compCx}" cy="${compTopCy}" rx="${compTopRx}" ry="${compDomeH}" fill="none" stroke="purple" stroke-width="1" stroke-dasharray="4,4"/>
     <ellipse cx="${compLeftHairCx}" cy="${compHairCy}" rx="${compSideRx}" ry="${compSideRy}" fill="none" stroke="purple" stroke-width="1" stroke-dasharray="4,4"/>
     <ellipse cx="${compRightHairCx}" cy="${compHairCy}" rx="${compSideRx}" ry="${compSideRy}" fill="none" stroke="purple" stroke-width="1" stroke-dasharray="4,4"/>

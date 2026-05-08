@@ -6,6 +6,189 @@
 
 ---
 
+## v2.0 — 2026-05-08 — Scene1 完整迁移 scene6v3 mask-inpainting pipeline
+
+**修改人**: liwz0319
+**关联 commit**: `pending`
+**影响范围**: scene1（新增独立 pipeline）
+
+### 变更摘要
+
+从 `baolana-faceswap-demo` 仓库完整迁移 scene6v3 pipeline 作为 scene1 的新版本。scene6v3 使用完全不同的架构（mask inpainting + LLM审核 + protectedRegions），替代原有的 faceswap-composite + hairDome mask 流程。
+
+**底图不变**：场景1男.jpg / 场景1女.jpg（与 scene6v3 底图完全相同，文件大小一致）。
+
+**新 pipeline 核心特性**：
+1. **双模型并行生成**：Seedream 4.5 (strength=0.78) + Seedream 5.0 (strength=0.82) 同时生成，由 LLM Vision API 选择最佳结果
+2. **mask inpainting**：用 `mask_image` 参数限定编辑区域为头/发/颈椭圆区域，彻底保护背景和身体
+3. **LLM 审核**：12 项视觉质量检查（face_replaced, body_scale_matches_base, jersey_collar_unchanged 等），score ≥ 8 通过
+4. **自动重试**：最多 2 轮重生成 + LLM prompt 重写，失败时取最高分兜底
+5. **确定性守卫**：暗领口像素检测、人审笔记注入等
+6. **固定场景区域合成**：editRegions 直接回贴底图，配合 protectedRegions 还原啤酒杯、maskedProtectedRegions 还原拜仁 logo
+7. **用户特征适配**：性别路由（男/女底图自动选择）、眼镜检测、配饰排除、领口锁定
+
+### 新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `scenes/scene1v3_male.json` | 男版场景配置（editRegions + protectedRegions） |
+| `scenes/scene1v3_female.json` | 女版场景配置（editRegions + finalRegions + protectedRegions + maskedProtectedRegions） |
+| `scripts/run-scene1-v3.js` | Stage A 批量生成脚本（mask inpainting, 4.5/5.0 双模型并行） |
+| `scripts/run-scene1-v3-full.js` | 完整 pipeline 脚本（Stage A → LLM审核 → 选图 → 合成） |
+| `src/pipeline.js` | 核心 pipeline（prompt构建、合成、质量检查、API调用） |
+| `src/scenes.js` | 场景配置加载与验证 |
+| `src/scene1v3-traits.js` | 用户特征解析（性别路由、眼镜检测） |
+| `src/trait-detector.js` | Vision API 特征检测 |
+
+### 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `scene-configs/scene1.js` | 新增 `v3` 元数据字段 |
+| `scene-configs/index.js` | 导出 `SCENE1_V3_PIPELINE` |
+
+### 与旧 pipeline 对比
+
+| 特性 | v1.6 (faceswap-composite) | v2.0 (mask-inpainting-llm-review) |
+|------|--------------------------|----------------------------------|
+| 模式 | faceswap-composite | mask inpainting |
+| 模型 | Seedream 4.5 单模型 | Seedream 4.5 + 5.0 双模型并行 |
+| mask 形状 | hairDome | 椭圆 |
+| 审核 | validateHeadSwap (单次) | LLM Vision 12项审核 + 确定性守卫 |
+| 重试 | 无 | 最多 2 轮重生成 + prompt 重写 |
+| 合成 | post-composite 背景锁定 | editRegions 回贴 + protectedRegions 还原 |
+| 保护区 | 无 | 啤酒杯 + 拜仁 logo |
+| 运行入口 | test-faceswap-inpaint-scenes.js | scripts/run-scene1-v3-full.js |
+| 坐标格式 | 绝对像素 | 归一化 (0-1) |
+
+### 用法
+
+```bash
+# Stage A 批量生成（只做 mask inpainting）
+node scripts/run-scene1-v3.js --user-dir 素材/用户测试照片 --env server/.env
+
+# 完整 pipeline（Stage A → 审核 → 合成）
+node scripts/run-scene1-v3-full.js \
+  --manifest 生成测试/scene1v3_result/scene1v3_stagea_XXXXXXXX/manifest.json \
+  --env server/.env
+```
+
+## v1.6 — 2026-05-06 — Scene3 女版脖子可见区修复
+
+**修改人**: Codex
+**关联 commit**: `pending`
+**影响范围**: scene3 女、test-faceswap-inpaint-scenes.js、server/src/synthesisWorker.js、tools/debug_mask_scene3.js
+
+### 变更摘要
+
+修复 Scene3 女版结果里“下巴直接压在领口上、几乎没有可见脖子”的问题。根因不是接口失败，而是 `hairDome` 下半身主体一直是直筒矩形，叠加女版头位偏低，模型会把整张脸一路压到底部，领口上方留不出前颈空间。
+
+本次修复分两层：
+
+1. **结构修复**：`hairDome` 新增 `apiBodyInsetX` / `compBodyInsetX`，允许下半身主体向内收窄，形成更接近真实脖子的 taper。
+2. **Scene3 女版调参**：上移 `apiCy` / `compCy`，缩小 `refHeadFillRatio` 与女版宽度，并补充“必须留出可见脖子”的 prompt / negative terms。
+3. **参考裁剪兜底**：`refNormalize` 新增最大宽高裁剪上限，避免宽肩/近景参考图把整个上半身一起带进标准化参考。
+
+### 参数变更对照
+
+#### Scene 3 女
+
+| 参数 | v1.5 | v1.6 | 原因 |
+|------|------|------|------|
+| **新增** refNormalizeMaxCropWidth/Height | 无 | **0.78 / 0.72** | 限制自动脸框过宽时把肩颈一起裁进参考图 |
+| refHeadFillRatio | 0.28 | **0.26** | 进一步压缩标准化参考头部，避免头过大导致脖子消失 |
+| extraPromptLines | 无显式可见脖子约束 | **新增 2 条 visible neck / head height 锁定** | 明确要求下巴与领口之间留出前颈空间 |
+| extraNegativeTerms | 无“无脖子”定向负词 | **新增 no visible neck / chin glued to collar 等** | 直接压制“头压领口”构图 |
+| cy / w / h | 298 / 198 / 356 | **292 / 192 / 350** | 校验中心上提并略收窄整体头颈框 |
+| apiCx/Cy/W/H | 934 / 268 / 188 / 344 | **934 / 260 / 184 / 340** | API mask 上提并略收窄 |
+| **新增** apiBodyInsetX | 无 | **12** | 让 API mask 下半身向内收脖子 |
+| apiNeckRx/ry | 42 / 22 | **34 / 24** | 保留细颈桥，不再鼓出宽颈块 |
+| apiNeckOffsetY | 344 | **340** | 让颈桥更贴近真实领口开口 |
+| compCx/Cy/W/H | 934 / 272 / 232 / 382 | **934 / 264 / 224 / 376** | composite 区域同步上提、收窄 |
+| **新增** compBodyInsetX | 无 | **18** | composite 主体下半部形成更明显 taper |
+| compNeckRx/ry | 50 / 24 | **40 / 28** | 拉长可见脖子区，同时避免宽颈覆盖 |
+| compNeckOffsetY | 382 | **376** | 保持下巴上提后仍有自然颈桥 |
+| compMaxBottomY | 480 | **476** | 与新的上提布局保持一致，避免再次压到领口 |
+
+#### 代码
+
+- `test-faceswap-inpaint-scenes.js` 与 `server/src/synthesisWorker.js`
+  - `hairDome` 支持 `apiBodyInsetX` / `compBodyInsetX`
+  - outer mask 和 inner solid mask 都按 inset 收窄下半身主体
+- `tools/debug_mask_scene3.js`
+  - 预览图同步显示 taper 后的 body rect，便于继续调 Scene3
+
+### 预期效果
+
+- Scene3 女版下巴不再直接贴住领口
+- 领口上方能保留一段可见前颈
+- 继续保留 v1.5 的红色衣领保护逻辑
+
+## v1.5 — 2026-05-06 — Scene3 领口保护与下边界裁切
+
+**修改人**: Codex
+**关联 commit**: `pending`
+**影响范围**: scene3 男/女、test-faceswap-inpaint-scenes.js
+
+### 变更摘要
+
+修复 Scene3 inpaint 结果中“脖子覆盖原始领口、红色衣领消失”的问题。根因是 Scene3 的 `apiNeck` / `compNeck` 椭圆和下半身主体矩形下探过深，post-composite 又把这部分 AI 像素保留回成图，导致领口中心被新的肤色区域覆盖。
+
+本次修复分两层：
+
+1. **Scene3 参数收紧**：缩小男女版 neck 椭圆半径，收紧 `apiH` / `compH`，降低 feather，并新增领口保护 prompt / negative terms。
+2. **代码级兜底**：`buildMask()` 新增 `apiMaxBottomY` / `compMaxBottomY` 支持，对 mask 形状做下边界裁切，避免后续 neck 参数继续下探到领口以下。
+
+### 参数变更对照
+
+#### Scene 3 男
+
+| 参数 | v1.4 | v1.5 | 原因 |
+|------|------|------|------|
+| validationRule | 领口可见性未明确约束 | **明确要求保留原始红色领口** | 提高校验与提示一致性 |
+| extraPromptLines | 仅要求 neck-to-collar blend | **改为 collar preservation + neck stop line** | 防止模型把领口当成可生成皮肤区 |
+| extraNegativeTerms | 无领口覆盖相关负词 | **新增 4 条领口覆盖负词** | 明确压制衣领消失 |
+| api h | 372 | **358** | 收紧 API 下边界 |
+| apiNeckRx/ry | 60 / 58 | **42 / 34** | 缩小颈部覆盖 |
+| apiNeckOffsetY | 352 | **320** | 上移颈部椭圆 |
+| **新增** apiMaxBottomY | 无 | **438** | 代码级下边界裁切 |
+| comp h | 420 | **392** | 收紧 composite 下边界 |
+| compNeckRx/ry | 74 / 70 | **50 / 38** | 缩小颈部融合区 |
+| compNeckOffsetY | 392 | **340** | 上移 composite 颈部椭圆 |
+| **新增** compMaxBottomY | 无 | **452** | 防止 post-composite 覆盖领口 |
+| compFeather | 18 | **14** | 缩小向领口方向的羽化渗透 |
+
+#### Scene 3 女
+
+| 参数 | v1.4 | v1.5 | 原因 |
+|------|------|------|------|
+| validationRule | 领口可见性未明确约束 | **明确要求保留原始红色领口** | 提高校验与提示一致性 |
+| extraPromptLines | 仅要求 neck-to-collar blend | **改为 collar preservation + neck stop line** | 防止模型把领口当成可生成皮肤区 |
+| extraNegativeTerms | 无领口覆盖相关负词 | **新增 4 条领口覆盖负词** | 明确压制衣领消失 |
+| api h | 356 | **344** | 收紧 API 下边界 |
+| apiNeckRx/ry | 56 / 60 | **40 / 34** | 缩小颈部覆盖 |
+| apiNeckOffsetY | 335 | **306** | 上移颈部椭圆 |
+| **新增** apiMaxBottomY | 无 | **440** | 代码级下边界裁切 |
+| comp h | 398 | **382** | 收紧 composite 下边界 |
+| compNeckRx/ry | 68 / 68 | **48 / 38** | 缩小颈部融合区 |
+| compNeckOffsetY | 365 | **326** | 上移 composite 颈部椭圆 |
+| **新增** compMaxBottomY | 无 | **452** | 防止 post-composite 覆盖领口 |
+| compFeather | 18 | **14** | 缩小向领口方向的羽化渗透 |
+
+#### test-faceswap-inpaint-scenes.js
+
+新增功能：
+
+- `resolveMaskClipBottom()`：把配置中的底图坐标裁切线换算到输出尺寸
+- `wrapSvgWithBottomClip()`：对 API mask / composite mask / inner solid mask 做统一的 SVG 下边界裁切
+- buildMask 日志新增 `clipBottom` 输出，便于调试 Scene3 领口保护
+
+### 预期效果
+
+- Scene3 头颈仍可自然衔接
+- 原始红色领口与 neckline seam 恢复可见
+- post-composite 不再把 AI 生成的肤色胸前块贴回成图
+
 ## 版本格式说明
 
 - 版本号：`v<主版本>.<次版本>`，例如 `v1.0`、`v1.1`、`v2.0`

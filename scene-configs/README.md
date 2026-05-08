@@ -66,6 +66,6 @@ docs/scene-versions/CHANGELOG.md
 
 ### 当前版本
 
-- **版本号**: v1.4
-- **日期**: 2026-05-06
-- **基线说明**: 全场景统一升级：hairDome mask 统一化、refNormalize、validateHeadSwap、prompt 大幅扩充，详见 `docs/scene-versions/CHANGELOG.md`
+- **版本号**: v2.0
+- **日期**: 2026-05-08
+- **基线说明**: Scene1 完整迁移 scene6v3 mask-inpainting pipeline（双模型并行 + LLM审核 + protectedRegions 还原），独立运行于 `scripts/run-scene1-v3.js` 和 `scripts/run-scene1-v3-full.js`；其余场景沿用既有基线，详见 `docs/scene-versions/CHANGELOG.md`

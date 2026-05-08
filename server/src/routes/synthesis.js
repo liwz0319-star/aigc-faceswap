@@ -8,6 +8,9 @@ const { body, validationResult } = require('express-validator');
 const { createTask, getTask, enqueueTask, STATUS } = require('../taskQueue');
 const { normalizePlayerId, normalizeSceneId } = require('../assetStore');
 
+// ─── scene-configs：经过测试调优的完整场景配置 ───
+const { SCENE_CONFIGS } = require('../../../scene-configs');
+
 const router = express.Router();
 const configuredApiKey = (process.env.SERVER_API_KEY || '').trim();
 const SERVER_API_KEY = configuredApiKey && configuredApiKey !== 'your_server_api_key_here'
@@ -19,73 +22,29 @@ const SCENE1_ID = 'scene_01';
 const DEFAULT_SCENE1_STAR_IDS = (process.env.SCENE1_DEFAULT_STAR_IDS || '101,105,108')
   .split(',').map(id => id.trim()).filter(Boolean);
 
-// ═══ Faceswap 模板映射 ═══
-// H5 无需改动，服务端自动将 scene_id 映射为 faceswap 模板
-const FACESWAP_BASE_URL = (process.env.FACESWAP_BASE_URL || '').trim()
-  || 'http://111.229.177.65:3001/public/faceswap';
+// ═══ Faceswap 模板映射（从 scene-configs 动态生成）═══
+// scene-configs 包含完整配置：mode、mask、extraPromptLines、extraNegativeTerms 等
+// 这里构建与原有 FACESWAP_TEMPLATES 兼容的结构，同时透传完整 scene config
+const TEMPLATE_BASE_URL = (process.env.TEMPLATE_BASE_URL || '').trim()
+  || 'http://111.229.177.65:3001/新场景底图';
 
-// template_type:
-//   'mannequin' → 底图中目标位置为空白/模糊占位头，只填入人脸，其余全部锁定
-//   'faceswap'  → 底图中目标位置为真实人脸，替换为球迷人脸，其余全部锁定
-const FACESWAP_TEMPLATES = {
-  '1': {
-    male: {
-      template_image:  `${FACESWAP_BASE_URL}/scene1-M.png`,
-      target_person:   'the only person in the image',
-      template_type:   'mannequin',
-      size:            '1536x2560',
-      strength:        0.35,
-      guidance_scale:  10,
-    },
-    female: {
-      template_image:  `${FACESWAP_BASE_URL}/scene1-F.png`,
-      target_person:   'the only person in the image',
-      template_type:   'mannequin',
-      size:            '1536x2560',
-      strength:        0.35,
-      guidance_scale:  10,
-    },
-  },
-  '2': {
-    // 场景2不区分性别，男女均使用同一张底图
-    male: {
-      template_image:  `${FACESWAP_BASE_URL}/scene2.jpg`,
-      target_person:   'the only person in the image',
-      template_type:   'mannequin',
-      size:            '1536x2560',
-      strength:        0.35,
-      guidance_scale:  10,
-    },
-    female: {
-      template_image:  `${FACESWAP_BASE_URL}/scene2.jpg`,
-      target_person:   'the only person in the image',
-      template_type:   'mannequin',
-      size:            '1536x2560',
-      strength:        0.35,
-      guidance_scale:  10,
-    },
-  },
-  // 场景3：待确认底图后补充
-  '4': {
-    male: {
-      template_image:  `${FACESWAP_BASE_URL}/scene4-M.png`,
-      target_person:   'the person on the far left',
-      template_type:   'faceswap',
-      size:            '2560x1536',
-      strength:        0.45,
-      guidance_scale:  10,
-    },
-    // 暂无女版底图，先复用男版；女版底图确认后替换 template_image
-    female: {
-      template_image:  `${FACESWAP_BASE_URL}/scene4-M.png`,
-      target_person:   'the person on the far left',
-      template_type:   'faceswap',
-      size:            '2560x1536',
-      strength:        0.45,
-      guidance_scale:  10,
-    },
-  },
-};
+const FACESWAP_TEMPLATES = {};
+for (const [sceneNum, sceneConfig] of Object.entries(SCENE_CONFIGS)) {
+  FACESWAP_TEMPLATES[sceneNum] = {};
+  for (const [gender, conf] of Object.entries(sceneConfig)) {
+    FACESWAP_TEMPLATES[sceneNum][gender] = {
+      template_image:  `${TEMPLATE_BASE_URL}/${encodeURIComponent(conf.file)}`,
+      target_person:   conf.targetPerson || 'the only person in the image',
+      template_type:   conf.templateType || conf.template_type || 'faceswap',
+      size:            conf.size || '2048x2560',
+      strength:        conf.strength ?? 0.45,
+      guidance_scale:  conf.guidance ?? conf.guidance_scale ?? 10,
+      // ─── scene-configs 完整配置透传 ───
+      scene_config: conf,
+    };
+  }
+}
+console.log(`[Route] scene-configs 已加载: scenes=[${Object.keys(FACESWAP_TEMPLATES).join(',')}]`);
 
 /**
  * 简易速率限制（基于IP，内存存储）
@@ -159,7 +118,7 @@ router.post(
   [
     body('star_ids')
       .optional()
-      .isArray({ min: 3, max: 3 }).withMessage('star_ids 必须恰好包含3个球星'),
+      .isArray().withMessage('star_ids 必须是数组'),
     body('star_ids.*').optional().custom(value => {
       if (typeof value !== 'string' && typeof value !== 'number') {
         throw new Error('每个球星ID必须是字符串或数字');
@@ -213,17 +172,17 @@ router.post(
       const resolvedGender = gender || 'male';
       const resolvedCallbackUrl = callback_url || DEFAULT_CALLBACK_URL || null;
 
-      // user_images 为主参数，过滤无效图片
+      // user_images 为主参数，仅接受 Base64（服务器 DNS 可能无法解析外部 URL）
       const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
-        ? user_images.filter(img => img && (img.startsWith('data:image/') || isValidHttpUrl(img)))
-        : (user_image && (user_image.startsWith('data:image/') || isValidHttpUrl(user_image)))
+        ? user_images.filter(img => img && img.startsWith('data:image/'))
+        : (user_image && user_image.startsWith('data:image/'))
           ? [user_image]
           : [];
 
       if (resolvedUserImages.length === 0) {
         return res.status(400).json({
           code: 400,
-          message: 'user_images 中无有效图片，需为 Base64 或 URL',
+          message: 'user_images 中无有效图片，仅支持 Base64 (data:image/...) 格式，不支持外部 URL',
           data: null,
         });
       }
@@ -253,7 +212,9 @@ router.post(
       if (faceswapConfig) {
         // 传两套模板给 Worker，Worker 根据视觉模型检测的性别自动选择
         const defaultGenderConfig = faceswapConfig[resolvedGender] || faceswapConfig.male;
-        console.log(`[Route] [submit] 自动切换 faceswap 模式 (scene=${sceneNum}, default_gender=${resolvedGender})`);
+        // 从 scene-configs 获取 mode（faceswap-composite / inpaint / faceswap）
+        const sceneMode = defaultGenderConfig.scene_config?.mode || 'faceswap';
+        console.log(`[Route] [submit] 自动切换 ${sceneMode} 模式 (scene=${sceneNum}, default_gender=${resolvedGender})`);
         taskParams = {
           mode: 'faceswap',
           faceswap_scene: sceneNum,
@@ -263,6 +224,8 @@ router.post(
           target_person: defaultGenderConfig.target_person,
           gender: resolvedGender,
           callback_url: resolvedCallbackUrl,
+          // 透传完整 scene-config 给 Worker
+          faceswap_config: defaultGenderConfig.scene_config || null,
         };
       } else {
         // 非 faceswap 模式：校验 star_ids
@@ -350,8 +313,8 @@ router.post(
       const resolvedGender    = gender || 'male';
       const resolvedCallback  = callback_url || DEFAULT_CALLBACK_URL || null;
 
-      if (!isValidHttpUrl(user_image) && !user_image.startsWith('data:image/')) {
-        return res.status(400).json({ code: 400, message: 'user_image 格式无效，需为 Base64 或 URL', data: null });
+      if (!user_image || !user_image.startsWith('data:image/')) {
+        return res.status(400).json({ code: 400, message: 'user_image 格式无效，仅支持 Base64 (data:image/...) 格式，不支持外部 URL', data: null });
       }
       if (resolvedCallback && !isValidHttpUrl(resolvedCallback)) {
         return res.status(400).json({ code: 400, message: 'callback_url 必须是有效的 HTTP/HTTPS 地址', data: null });
@@ -360,7 +323,7 @@ router.post(
       const normalizedStarIds  = resolvedStarIds.map(normalizePlayerId);
       const normalizedSceneId  = normalizeSceneId(SCENE1_ID);
       const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
-        ? user_images.filter(v => v && (v.startsWith('data:image/') || isValidHttpUrl(v)))
+        ? user_images.filter(v => v && v.startsWith('data:image/'))
         : [user_image];
 
       // ── Faceswap 自动映射：scene_id → 模板图 + target_person ──
@@ -370,8 +333,9 @@ router.post(
       let taskParams;
       if (faceswapConfig) {
         // 使用 faceswap 模式：H5 无感知
-        console.log(`[Route] [scene1] 自动切换 faceswap 模式 (scene=${sceneNum})`);
         const defaultGenderConfig1 = faceswapConfig[resolvedGender] || faceswapConfig.male;
+        const sceneMode = defaultGenderConfig1.scene_config?.mode || 'faceswap';
+        console.log(`[Route] [scene1] 自动切换 ${sceneMode} 模式 (scene=${sceneNum})`);
         taskParams = {
           mode: 'faceswap',
           faceswap_scene: sceneNum,
@@ -381,6 +345,8 @@ router.post(
           target_person: defaultGenderConfig1.target_person,
           gender: resolvedGender,
           callback_url: resolvedCallback,
+          // 透传完整 scene-config 给 Worker
+          faceswap_config: defaultGenderConfig1.scene_config || null,
         };
       } else {
         // 无模板配置，回退到原有模式

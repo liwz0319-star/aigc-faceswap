@@ -24,7 +24,7 @@ const REQUEST_TIMEOUT = 180000; // 3 分钟
  * @param {Object} [params.scene_params] - 场景级参数覆盖（来自 scenes.json native_params）
  * @returns {Promise<{url: string, urls: string[]}>}
  */
-async function generateNativeImage({ prompt, images = [], size = '1664x1664', negative_prompt, scene_params = {} }) {
+async function generateNativeImage({ prompt, images = [], size = '1664x1664', negative_prompt, mask_image, scene_params = {} }) {
   if (!API_KEY) {
     throw new Error('SEEDREAM_NATIVE_API_KEY 未配置');
   }
@@ -52,6 +52,12 @@ async function generateNativeImage({ prompt, images = [], size = '1664x1664', ne
   if (images.length > 0) {
     payload.image = images;
     payload.strength = strength;
+  }
+
+  // inpaint mask：告诉 API 只在 mask 白色区域重绘
+  if (mask_image) {
+    payload.mask_image = mask_image;  // Seedream API 接受字符串，不是数组
+    console.log(`[NativeClient] inpaint mask 已附加`);
   }
 
   // Seedream 5.0 不支持 guidance_scale

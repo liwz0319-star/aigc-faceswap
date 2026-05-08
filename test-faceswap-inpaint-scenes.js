@@ -372,6 +372,48 @@ function resolveReferenceCropRect(canvasW, canvasH, crop = null) {
   };
 }
 
+function clampNormalizedReferenceCrop(crop, conf) {
+  if (!crop) return crop;
+
+  const maxWidth = typeof conf.refNormalizeMaxCropWidth === 'number'
+    ? clamp(conf.refNormalizeMaxCropWidth, 0.1, 1)
+    : null;
+  const maxHeight = typeof conf.refNormalizeMaxCropHeight === 'number'
+    ? clamp(conf.refNormalizeMaxCropHeight, 0.1, 1)
+    : null;
+  if (!maxWidth && !maxHeight) return crop;
+
+  let width = clamp(crop.width ?? 1, 0.1, 1);
+  let height = clamp(crop.height ?? 1, 0.1, 1);
+  const baseOffsetX = typeof crop.offsetX === 'number' ? crop.offsetX : 0.5;
+  const baseOffsetY = typeof crop.offsetY === 'number'
+    ? crop.offsetY
+    : crop.anchor === 'north'
+    ? 0
+    : 0.5;
+  let left = clamp((1 - width) * baseOffsetX, 0, Math.max(0, 1 - width));
+  let top = clamp((1 - height) * baseOffsetY, 0, Math.max(0, 1 - height));
+
+  if (maxWidth && width > maxWidth) {
+    const centerX = left + width / 2;
+    width = maxWidth;
+    left = clamp(centerX - width / 2, 0, Math.max(0, 1 - width));
+  }
+  if (maxHeight && height > maxHeight) {
+    const centerY = top + height / 2;
+    height = maxHeight;
+    top = clamp(centerY - height / 2, 0, Math.max(0, 1 - height));
+  }
+
+  return {
+    width,
+    height,
+    offsetX: width < 0.999 ? clamp(left / (1 - width), 0, 1) : 0.5,
+    offsetY: height < 0.999 ? clamp(top / (1 - height), 0, 1) : 0.5,
+    anchor: crop.anchor,
+  };
+}
+
 async function buildReferenceSubjectBuffer(input, canvasW, canvasH, scale = 1, crop = null) {
   const resolvedScale = (!scale || scale >= 0.999) ? 1 : scale;
   if (!crop && resolvedScale >= 0.999) return input;
@@ -703,11 +745,28 @@ async function detectFaceBounds(imageBase64) {
     if (!match) { _faceBoundsCache.set(cacheKey, null); return null; }
 
     const raw = JSON.parse(match[0]);
+    let rx = Number(raw.x) || 20;
+    let ry = Number(raw.y) || 10;
+    let rw = Number(raw.w) || 30;
+    let rh = Number(raw.h) || 30;
+    // Auto-detect pixel vs percentage: if any value > 100, API returned pixel coords
+    if (rx > 100 || ry > 100 || rw > 100 || rh > 100) {
+      try {
+        const b64data = imageBase64.replace(/^data:[^;]+;base64,/, '');
+        const imgMeta = await sharp(Buffer.from(b64data, 'base64')).metadata();
+        const iw = imgMeta.width || 1024;
+        const ih = imgMeta.height || 1024;
+        rx = rx / iw * 100;
+        ry = ry / ih * 100;
+        rw = rw / iw * 100;
+        rh = rh / ih * 100;
+      } catch (_) { /* fallback: use raw values, clamp will cap them */ }
+    }
     const result = {
-      x: clamp(Number(raw.x) || 20, 0, 90),
-      y: clamp(Number(raw.y) || 10, 0, 90),
-      w: clamp(Number(raw.w) || 30, 5, 95),
-      h: clamp(Number(raw.h) || 30, 5, 95),
+      x: clamp(rx, 0, 90),
+      y: clamp(ry, 0, 90),
+      w: clamp(rw, 5, 95),
+      h: clamp(rh, 5, 95),
     };
     _faceBoundsCache.set(cacheKey, result);
     return result;
@@ -764,11 +823,12 @@ async function buildReferenceVariants(photoPath, conf, originalUserBase64, faceC
   if (faceCrop && conf.refNormalize) {
     const headFill = conf.refHeadFillRatio ?? 0.38;
     const useSoftOval = Boolean(conf.refAlwaysSoftOval);
+    const normalizedCrop = clampNormalizedReferenceCrop(faceCrop, conf);
 
     try {
       const normBase64 = useSoftOval
-        ? await toSoftOvalReferenceDataUrl(photoPath, headFill, conf.refAnchor || 'center', conf.refOffsetX ?? 0.5, conf.refOffsetY, faceCrop)
-        : await toScaledReferenceDataUrl(photoPath, headFill, conf.refAnchor || 'center', conf.refOffsetX ?? 0.5, conf.refOffsetY, faceCrop);
+        ? await toSoftOvalReferenceDataUrl(photoPath, headFill, conf.refAnchor || 'center', conf.refOffsetX ?? 0.5, conf.refOffsetY, normalizedCrop)
+        : await toScaledReferenceDataUrl(photoPath, headFill, conf.refAnchor || 'center', conf.refOffsetX ?? 0.5, conf.refOffsetY, normalizedCrop);
       const normLabel = `face-norm${useSoftOval ? '+oval' : ''}@${headFill}`;
       variants.push({ label: normLabel, scale: headFill, base64: normBase64 });
       console.log(`    [faceNormalize] 标准化参考图: 裁剪${useSoftOval ? '+软椭圆' : ''} 缩放=${headFill}`);
@@ -831,6 +891,19 @@ async function buildReferenceVariants(photoPath, conf, originalUserBase64, faceC
   return variants;
 }
 
+function resolveMaskClipBottom(limitY, scaleY, outputH) {
+  if (typeof limitY !== 'number' || !Number.isFinite(limitY)) return null;
+  return clamp(Math.round(limitY * scaleY), 1, outputH);
+}
+
+function wrapSvgWithBottomClip(outputW, outputH, content, clipBottomY) {
+  if (!clipBottomY) return `<svg width="${outputW}" height="${outputH}">${content}</svg>`;
+  return `<svg width="${outputW}" height="${outputH}">` +
+    `<defs><clipPath id="maskBottomClip"><rect x="0" y="0" width="${outputW}" height="${clipBottomY}"/></clipPath></defs>` +
+    `<g clip-path="url(#maskBottomClip)">${content}</g>` +
+    `</svg>`;
+}
+
 /**
  * 生成椭圆 inpainting mask（白色=换脸区域，黑色=保留区域）
  * 坐标基于原始底图像素，自动缩放到 API 输出尺寸
@@ -851,14 +924,20 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
   const mcx = Math.round(mask.cx * scaleX);
   const mcy = Math.round(mask.cy * scaleY);
   if ('w' in mask && (mask.apiW || mask.apiH || mask.compW || mask.compH || mask.apiCx || mask.apiCy || mask.compCx || mask.compCy)) {
+    const apiClipBottom = resolveMaskClipBottom(mask.apiMaxBottomY ?? mask.maxBottomY, scaleY, outputH);
+    const compClipBottom = resolveMaskClipBottom(mask.compMaxBottomY ?? mask.maxBottomY, scaleY, outputH);
     const apiCx = Math.round((mask.apiCx ?? mask.cx) * scaleX);
     const apiCy = Math.round((mask.apiCy ?? mask.cy) * scaleY);
     const apiW = Math.round((mask.apiW ?? mask.w) * scaleX);
     const apiH = Math.round((mask.apiH ?? mask.h) * scaleY);
     const apiLeft = apiCx - Math.round(apiW / 2);
     const apiTop = apiCy - Math.round(apiH / 2);
-    let svgAPI = `<svg width="${outputW}" height="${outputH}">` +
-      `<rect x="${apiLeft}" y="${apiTop}" width="${apiW}" height="${apiH}" fill="white"/></svg>`;
+    let svgAPI = wrapSvgWithBottomClip(
+      outputW,
+      outputH,
+      `<rect x="${apiLeft}" y="${apiTop}" width="${apiW}" height="${apiH}" fill="white"/>`,
+      apiClipBottom
+    );
     if (mask.apiShape === 'hairDome') {
       const domeH = Math.max(1, Math.round((mask.apiDomeH ?? Math.round(mask.apiH * 0.3)) * scaleY));
       const domeExpandX = Math.max(0, Math.round((mask.apiDomeExpandX ?? 0) * scaleX));
@@ -866,8 +945,11 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       const sideRy = Math.max(1, Math.round((mask.apiSideHairH ?? 0) * scaleY));
       const sideOffsetX = Math.max(0, Math.round((mask.apiSideHairOffsetX ?? 0) * scaleX));
       const sideOffsetY = Math.max(0, Math.round((mask.apiSideHairOffsetY ?? 0) * scaleY));
+      const bodyInsetX = Math.max(0, Math.round((mask.apiBodyInsetX ?? 0) * scaleX));
       const bodyTop = apiTop + Math.round(domeH * 0.52);
       const bodyH = Math.max(1, apiTop + apiH - bodyTop);
+      const bodyLeft = apiLeft + bodyInsetX;
+      const bodyW = Math.max(1, apiW - bodyInsetX * 2);
       const topRx = Math.round(apiW / 2) + domeExpandX;
       const topCy = apiTop + domeH;
       const leftHairCx = apiCx - sideOffsetX;
@@ -881,13 +963,14 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
         const neckCy = apiTop + Math.round((mask.apiNeckOffsetY ?? apiH * 0.8) * scaleY);
         neckSvgAPI = `<ellipse cx="${apiCx}" cy="${neckCy}" rx="${neckRx}" ry="${neckRy}" fill="white"/>`;
       }
-      svgAPI = `<svg width="${outputW}" height="${outputH}">` +
+      svgAPI = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${apiCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
-        `<rect x="${apiLeft}" y="${bodyTop}" width="${apiW}" height="${bodyH}" fill="white"/>` +
+        `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
-        neckSvgAPI +
-        `</svg>`;
+        neckSvgAPI,
+        apiClipBottom
+      );
     }
     const apiBuf = await sharp({ create: { width: outputW, height: outputH, channels: 3, background: { r: 0, g: 0, b: 0 } } })
       .composite([{ input: Buffer.from(svgAPI), blend: 'over' }])
@@ -905,14 +988,13 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       : Math.max(12, Math.round(Math.min(compW, compH) * 0.075));
     const solidTopH = Math.min(compH, Math.max(0, Math.round((mask.compSolidTopH ?? 0) * scaleY)));
     const solidTopInset = Math.max(0, Math.round((mask.compSolidTopInset ?? 0) * scaleX));
-    let svgComp = `<svg width="${outputW}" height="${outputH}">` +
-      `<rect x="${compLeft}" y="${compTop}" width="${compW}" height="${compH}" fill="white"/>`;
+    let svgCompContent = `<rect x="${compLeft}" y="${compTop}" width="${compW}" height="${compH}" fill="white"/>`;
     if (solidTopH > 0) {
       const solidX = compLeft + solidTopInset;
       const solidW = Math.max(1, compW - solidTopInset * 2);
-      svgComp += `<rect x="${solidX}" y="${compTop}" width="${solidW}" height="${solidTopH}" fill="white"/>`;
+      svgCompContent += `<rect x="${solidX}" y="${compTop}" width="${solidW}" height="${solidTopH}" fill="white"/>`;
     }
-    svgComp += `</svg>`;
+    let svgComp = wrapSvgWithBottomClip(outputW, outputH, svgCompContent, compClipBottom);
     if (mask.compShape === 'hairDome') {
       const domeH = Math.max(1, Math.round((mask.compDomeH ?? Math.round(mask.compH * 0.32)) * scaleY));
       const domeExpandX = Math.max(0, Math.round((mask.compDomeExpandX ?? 0) * scaleX));
@@ -920,8 +1002,11 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       const sideRy = Math.max(1, Math.round((mask.compSideHairH ?? 0) * scaleY));
       const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
       const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
+      const bodyInsetX = Math.max(0, Math.round((mask.compBodyInsetX ?? 0) * scaleX));
       const bodyTop = compTop + Math.round(domeH * 0.55);
       const bodyH = Math.max(1, compTop + compH - bodyTop);
+      const bodyLeft = compLeft + bodyInsetX;
+      const bodyW = Math.max(1, compW - bodyInsetX * 2);
       const topRx = Math.round(compW / 2) + domeExpandX;
       const topCy = compTop + domeH;
       const leftHairCx = compCx - sideOffsetX;
@@ -935,13 +1020,14 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
         const neckCy = compTop + Math.round((mask.compNeckOffsetY ?? compH * 0.8) * scaleY);
         neckSvgComp = `<ellipse cx="${compCx}" cy="${neckCy}" rx="${neckRx}" ry="${neckRy}" fill="white"/>`;
       }
-      svgComp = `<svg width="${outputW}" height="${outputH}">` +
+      svgComp = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
-        `<rect x="${compLeft}" y="${bodyTop}" width="${compW}" height="${bodyH}" fill="white"/>` +
+        `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
-        neckSvgComp +
-        `</svg>`;
+        neckSvgComp,
+        compClipBottom
+      );
     }
     const compRaw = await sharp({ create: { width: outputW, height: outputH, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
       .composite([{ input: Buffer.from(svgComp), blend: 'over' }])
@@ -956,7 +1042,8 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
       const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
       const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
       const bodyTop = compTop + Math.round(domeH * 0.62);
-      const bodyInset = Math.max(1, Math.round(feather * 0.45));
+      const bodyInsetBase = Math.max(0, Math.round((mask.compBodyInsetX ?? 0) * scaleX));
+      const bodyInset = bodyInsetBase + Math.max(1, Math.round(feather * 0.45));
       const innerBodyH = Math.max(1, compTop + compH - bodyTop);
       const innerTopRx = Math.max(1, Math.round(compW / 2) + domeExpandX - Math.round(feather * 0.35));
       const innerTopRy = Math.max(1, domeH - Math.round(feather * 0.3));
@@ -974,23 +1061,24 @@ async function buildMask(inputW, inputH, mask, outputW, outputH) {
         const innerNeckCy = compTop + Math.round((mask.compNeckOffsetY ?? compH * 0.8) * scaleY);
         neckSvgSolid = `<ellipse cx="${compCx}" cy="${innerNeckCy}" rx="${innerNeckRx}" ry="${innerNeckRy}" fill="white"/>`;
       }
-      const svgSolidHair = `<svg width="${outputW}" height="${outputH}">` +
+      const svgSolidHair = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${innerTopRx}" ry="${innerTopRy}" fill="white"/>` +
         `<rect x="${compLeft + bodyInset}" y="${bodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>` +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
-        neckSvgSolid +
-        `</svg>`;
+        neckSvgSolid,
+        compClipBottom
+      );
       compBuf = await sharp(compBuf)
         .composite([{ input: Buffer.from(svgSolidHair), blend: 'over' }])
         .png()
         .toBuffer();
-      console.log(`    comp mask -> hairDome (${compLeft},${compTop}) ${compW}x${compH} feather=${feather}`);
+      console.log(`    comp mask -> hairDome (${compLeft},${compTop}) ${compW}x${compH} feather=${feather} clipBottom=${compClipBottom ?? 'none'}`);
       return { apiBuf, compBuf, cx: mcx, cy: mcy };
     }
 
-    console.log(`    api mask -> ${mask.apiShape === 'hairDome' ? 'hairDome' : 'rect'} (${apiLeft},${apiTop}) ${apiW}x${apiH} (${outputW}x${outputH})`);
-    console.log(`    comp mask -> rect (${compLeft},${compTop}) ${compW}x${compH} feather=${feather} solidTop=${solidTopH} inset=${solidTopInset}`);
+    console.log(`    api mask -> ${mask.apiShape === 'hairDome' ? 'hairDome' : 'rect'} (${apiLeft},${apiTop}) ${apiW}x${apiH} (${outputW}x${outputH}) clipBottom=${apiClipBottom ?? 'none'}`);
+    console.log(`    comp mask -> rect (${compLeft},${compTop}) ${compW}x${compH} feather=${feather} solidTop=${solidTopH} inset=${solidTopInset} clipBottom=${compClipBottom ?? 'none'}`);
     return { apiBuf, compBuf, cx: mcx, cy: mcy };
   }
   /*
@@ -1431,13 +1519,19 @@ async function runFaceswapCompositeTest({ photoTag, sceneId, conf, templatePath,
                                             userBase64, userDescription, gender, outputDir = OUTPUT_DIR }) {
   const [outW, outH] = conf.size.split('x').map(Number);
 
-  // 1. 构建 faceswap prompt
-  const { prompt, negative_prompt } = buildFaceswapPrompt({
+  // 1. 构建 faceswap prompt（追加场景级 extraPromptLines / extraNegativeTerms）
+  const basePrompt = buildFaceswapPrompt({
     targetPerson: conf.targetPerson || 'the person on the far left',
     userDescription,
     gender,
     templateType: conf.templateType || 'mannequin',
   });
+  const extraLines = (conf.extraPromptLines && conf.extraPromptLines.length)
+    ? '\n' + conf.extraPromptLines.join('\n') : '';
+  const extraNeg = (conf.extraNegativeTerms && conf.extraNegativeTerms.length)
+    ? ', ' + conf.extraNegativeTerms.join(', ') : '';
+  const prompt = basePrompt.prompt + extraLines;
+  const negative_prompt = basePrompt.negative_prompt + extraNeg;
 
   // 2. 构建 compBuf（仅 skipComposite=false 时需要）
   let compBuf;
