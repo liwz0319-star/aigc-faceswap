@@ -26,6 +26,7 @@ const { getTask, updateTask, STATUS } = require('./taskQueue');
 const { loadReferenceImage, loadJerseyReferences, loadBeerMugReference, loadCompositionReference, loadBackgroundReference, getPlayerReferenceImages } = require('./assetStore');
 const { describeUserAppearance } = require('./visionClient');
 const { describeUser }           = require('./userDescriber');
+const { runScene1V3Pipeline }    = require('./scene1v3Pipeline');
 // Seedream 调用重试配置
 const SEEDREAM_MAX_RETRIES = 2;
 const SEEDREAM_RETRY_DELAYS = [3000, 6000];
@@ -531,6 +532,7 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
       const sideOffsetX = Math.max(0, Math.round((mask.apiSideHairOffsetX ?? 0) * scaleX));
       const sideOffsetY = Math.max(0, Math.round((mask.apiSideHairOffsetY ?? 0) * scaleY));
       const bodyInsetX = Math.max(0, Math.round((mask.apiBodyInsetX ?? 0) * scaleX));
+      const includeApiBodyRect = mask.apiNoBodyRect !== true;
       const bodyTop = apiTop + Math.round(domeH * 0.52);
       const bodyH = Math.max(1, apiTop + apiH - bodyTop);
       const bodyLeft = apiLeft + bodyInsetX;
@@ -549,7 +551,7 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
       }
       svgAPI = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${apiCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
-        `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` +
+        (includeApiBodyRect ? `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` : '') +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         neckSvgAPI,
@@ -581,6 +583,7 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
       const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
       const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
       const bodyInsetX = Math.max(0, Math.round((mask.compBodyInsetX ?? 0) * scaleX));
+      const includeCompBodyRect = mask.compNoBodyRect !== true;
       const bodyTop = compTop + Math.round(domeH * 0.55);
       const bodyH = Math.max(1, compTop + compH - bodyTop);
       const bodyLeft = compLeft + bodyInsetX;
@@ -599,7 +602,7 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
       }
       svgComp = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
-        `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` +
+        (includeCompBodyRect ? `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` : '') +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         neckSvgComp,
@@ -627,16 +630,16 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
         const innerNeckCy = compTop + Math.round((mask.compNeckOffsetY ?? compH * 0.8) * scaleY);
         neckSvgSolid = `<ellipse cx="${compCx}" cy="${innerNeckCy}" rx="${innerNeckRx}" ry="${innerNeckRy}" fill="white"/>`;
       }
-      const svgSolidHair = wrapSvgWithBottomClip(outputW, outputH,
+      svgComp = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${innerTopRx}" ry="${innerTopRy}" fill="white"/>` +
-        `<rect x="${compLeft + bodyInset}" y="${innerBodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>` +
+        (includeCompBodyRect ? `<rect x="${compLeft + bodyInset}" y="${innerBodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>` : '') +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
         neckSvgSolid,
         compClipBottom
       );
       compBuf = await sharp(compBuf)
-        .composite([{ input: Buffer.from(svgSolidHair), blend: 'over' }])
+        .composite([{ input: Buffer.from(svgComp), blend: 'over' }])
         .png()
         .toBuffer();
       console.log(`[Worker] [mask] hairDome comp (${compLeft},${compTop}) ${compW}x${compH} feather=${feather}`);
@@ -1226,6 +1229,65 @@ async function processFaceswapTask(taskId, task) {
 /**
  * 处理单个合成任务
  */
+async function processScene1V3Task(taskId, task) {
+  const t0 = Date.now();
+  const { callback_url, user_images, user_image, gender } = task.params;
+
+  console.log(`[Worker] [scene1v3] start: ${taskId}`);
+
+  try {
+    const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
+      ? user_images
+      : [user_image].filter(Boolean);
+
+    const result = await runScene1V3Pipeline({
+      taskId,
+      userImages: resolvedUserImages,
+      genderHint: gender || null,
+    });
+
+    const callbackUrlImage = await localizeResultImage(`file://${result.finalImagePath}`, taskId);
+
+    await updateTask(taskId, {
+      status: STATUS.COMPLETED,
+      results: [{
+        image_url: callbackUrlImage,
+        url: callbackUrlImage,
+        scene_mode: 'scene1_v3',
+        scene_id: result.sceneId,
+        selected_model: result.selectedModel,
+        llm_winner: result.llmWinner,
+        llm_score_4_5: result.llmScore45,
+        llm_score_5_0: result.llmScore50,
+        fallback_best_score: result.fallbackBestScore,
+        traits: result.traits,
+      }],
+    });
+
+    await callbackH5WithRetry(callback_url, {
+      task_id: taskId,
+      user_image: callbackUrlImage,
+    });
+
+    console.log(`[Worker] [scene1v3] completed: ${taskId} (${Date.now() - t0}ms)`);
+  } catch (err) {
+    console.error(`[Worker] [scene1v3] failed: ${taskId} (${Date.now() - t0}ms)`, err.message);
+
+    await updateTask(taskId, { status: STATUS.FAILED, error: err.message });
+
+    try {
+      await callbackH5WithRetry(callback_url, {
+        task_id: taskId,
+        status: 'failed',
+        error: err.message,
+        message: '生成失败，请重试',
+      });
+    } catch (callbackErr) {
+      console.warn(`[Worker] [scene1v3] failure callback error: ${callbackErr.message}`);
+    }
+  }
+}
+
 async function processTask(taskId) {
   const t0 = Date.now();
   const task = await getTask(taskId);
@@ -1235,6 +1297,10 @@ async function processTask(taskId) {
   }
 
   // Faceswap 模式：独立分支处理
+  if (task.params.mode === 'scene1_v3') {
+    return processScene1V3Task(taskId, task);
+  }
+
   if (task.params.mode === 'faceswap') {
     return processFaceswapTask(taskId, task);
   }

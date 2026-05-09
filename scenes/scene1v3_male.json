@@ -1,0 +1,29 @@
+{
+  "id": "scene1v3_male",
+  "name": "Bayern Locker Room Male Mannequin v3 (adapted from scene6v3)",
+  "base": "素材/新场景底图/场景1男.jpg",
+  "target": "seated center mannequin",
+  "targetDetail": "the faceless seated mannequin in the center locker-room bay, wearing the red-and-white FC Bayern jersey and shorts, holding a Paulaner beer glass; replace only the mannequin blank head, face, hair, eyewear state, skin tone, and minimal neck transition with the user identity while preserving the exact seated body pose, jersey collar, hands, beer glass, bench, hanging jerseys, locker walls, Paulaner logos, and room perspective",
+  "protectedPerson": "the hanging FC Bayern jerseys on the left and right, Paulaner locker logos, seated body, jersey, hands, Paulaner beer glass, bench, locker walls, floor, and all background elements",
+  "syncBaseOutsideTarget": true,
+  "editRegions": [
+    {
+      "id": "target_user_head_hair_neck",
+      "x": 0.5163,
+      "y": 0.2680,
+      "width": 0.2015,
+      "height": 0.1947,
+      "feather": 20
+    }
+  ],
+  "protectedRegions": [
+    {
+      "id": "paulaner_beer_glass_restore",
+      "x": 0.515,
+      "y": 0.47,
+      "width": 0.08,
+      "height": 0.235,
+      "feather": 16
+    }
+  ]
+}

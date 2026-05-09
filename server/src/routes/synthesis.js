@@ -9,7 +9,7 @@ const { createTask, getTask, enqueueTask, STATUS } = require('../taskQueue');
 const { normalizePlayerId, normalizeSceneId } = require('../assetStore');
 
 // ─── scene-configs：经过测试调优的完整场景配置 ───
-const { SCENE_CONFIGS } = require('../../../scene-configs');
+const { SCENE_CONFIGS, SCENE1_V3_PIPELINE } = require('../../../scene-configs');
 
 const router = express.Router();
 const configuredApiKey = (process.env.SERVER_API_KEY || '').trim();
@@ -89,6 +89,12 @@ function isValidHttpUrl(url) {
   } catch {
     return false;
   }
+}
+
+function isSupportedUserImageInput(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && (value.startsWith('data:image/') || isValidHttpUrl(value));
 }
 
 function requireApiKey(req, res, next) {
@@ -174,15 +180,15 @@ router.post(
 
       // user_images 为主参数，仅接受 Base64（服务器 DNS 可能无法解析外部 URL）
       const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
-        ? user_images.filter(img => img && img.startsWith('data:image/'))
-        : (user_image && user_image.startsWith('data:image/'))
+        ? user_images.filter(isSupportedUserImageInput)
+        : isSupportedUserImageInput(user_image)
           ? [user_image]
           : [];
 
       if (resolvedUserImages.length === 0) {
         return res.status(400).json({
           code: 400,
-          message: 'user_images 中无有效图片，仅支持 Base64 (data:image/...) 格式，不支持外部 URL',
+          message: 'user_images must contain valid data:image/... or http/https image inputs',
           data: null,
         });
       }
@@ -209,7 +215,17 @@ router.post(
       const faceswapConfig = FACESWAP_TEMPLATES[sceneNum];
 
       let taskParams;
-      if (faceswapConfig) {
+      if (sceneNum === '1' && SCENE1_V3_PIPELINE) {
+        taskParams = {
+          mode: 'scene1_v3',
+          scene_id: normalizedSceneId,
+          user_image: resolvedUserImages[0],
+          user_images: resolvedUserImages,
+          gender: resolvedGender,
+          callback_url: resolvedCallbackUrl,
+          scene1_v3_pipeline: SCENE1_V3_PIPELINE,
+        };
+      } else if (faceswapConfig) {
         // 传两套模板给 Worker，Worker 根据视觉模型检测的性别自动选择
         const defaultGenderConfig = faceswapConfig[resolvedGender] || faceswapConfig.male;
         // 从 scene-configs 获取 mode（faceswap-composite / inpaint / faceswap）
@@ -313,8 +329,8 @@ router.post(
       const resolvedGender    = gender || 'male';
       const resolvedCallback  = callback_url || DEFAULT_CALLBACK_URL || null;
 
-      if (!user_image || !user_image.startsWith('data:image/')) {
-        return res.status(400).json({ code: 400, message: 'user_image 格式无效，仅支持 Base64 (data:image/...) 格式，不支持外部 URL', data: null });
+      if (!isSupportedUserImageInput(user_image)) {
+        return res.status(400).json({ code: 400, message: 'user_image must be a data:image/... or http/https image input', data: null });
       }
       if (resolvedCallback && !isValidHttpUrl(resolvedCallback)) {
         return res.status(400).json({ code: 400, message: 'callback_url 必须是有效的 HTTP/HTTPS 地址', data: null });
@@ -323,7 +339,7 @@ router.post(
       const normalizedStarIds  = resolvedStarIds.map(normalizePlayerId);
       const normalizedSceneId  = normalizeSceneId(SCENE1_ID);
       const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
-        ? user_images.filter(v => v && v.startsWith('data:image/'))
+        ? user_images.filter(isSupportedUserImageInput)
         : [user_image];
 
       // ── Faceswap 自动映射：scene_id → 模板图 + target_person ──
@@ -331,7 +347,17 @@ router.post(
       const faceswapConfig = FACESWAP_TEMPLATES[sceneNum];
 
       let taskParams;
-      if (faceswapConfig) {
+      if (sceneNum === '1' && SCENE1_V3_PIPELINE) {
+        taskParams = {
+          mode: 'scene1_v3',
+          scene_id: normalizedSceneId,
+          user_image,
+          user_images: resolvedUserImages,
+          gender: resolvedGender,
+          callback_url: resolvedCallback,
+          scene1_v3_pipeline: SCENE1_V3_PIPELINE,
+        };
+      } else if (faceswapConfig) {
         // 使用 faceswap 模式：H5 无感知
         const defaultGenderConfig1 = faceswapConfig[resolvedGender] || faceswapConfig.male;
         const sceneMode = defaultGenderConfig1.scene_config?.mode || 'faceswap';
