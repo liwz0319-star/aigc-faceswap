@@ -27,6 +27,13 @@ const { loadReferenceImage, loadJerseyReferences, loadBeerMugReference, loadComp
 const { describeUserAppearance } = require('./visionClient');
 const { describeUser }           = require('./userDescriber');
 const { runScene1V3Pipeline }    = require('./scene1v3Pipeline');
+const {
+  isEnabled: taskDiagnosticsEnabled,
+  patchTaskDiagnostics,
+  appendTaskDiagnostics,
+  summarizeUserImageInput,
+  summarizeUserImageInputs,
+} = require('./taskDiagnostics');
 // Seedream 调用重试配置
 const SEEDREAM_MAX_RETRIES = 2;
 const SEEDREAM_RETRY_DELAYS = [3000, 6000];
@@ -42,6 +49,25 @@ function sleep(ms) {
 // 结果图片本地化：下载到 public/results/ 并返回干净 URL
 const RESULTS_DIR = '/www/wwwroot/bayern-fan-photo/server/public/results';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'http://111.229.177.65:3001').replace(/\/+$/, '');
+const SCENE1_V3_RUNTIME_ROOT = path.resolve(__dirname, '..', '.runtime', 'scene1v3');
+
+async function patchTaskDiagnosticsSafe(taskId, patch) {
+  if (!taskDiagnosticsEnabled()) return;
+  try {
+    await patchTaskDiagnostics(taskId, patch);
+  } catch (error) {
+    console.warn(`[Worker] [diagnostics] patch failed for ${taskId}: ${error.message}`);
+  }
+}
+
+async function appendTaskDiagnosticsSafe(taskId, key, item) {
+  if (!taskDiagnosticsEnabled()) return;
+  try {
+    await appendTaskDiagnostics(taskId, key, item);
+  } catch (error) {
+    console.warn(`[Worker] [diagnostics] append failed for ${taskId}/${key}: ${error.message}`);
+  }
+}
 
 async function localizeResultImage(remoteUrl, taskId) {
   try {
@@ -408,15 +434,35 @@ async function detectFaceBounds(imageBase64) {
  * 构建预处理后的参考图（标准化脸部 + 缩放 + 可选软椭圆）
  */
 async function preprocessReferenceImage(userImageBase64, conf) {
+  const debug = {
+    configured: {
+      refScale: conf.refScale ?? null,
+      refNormalize: conf.refNormalize === true,
+      refCrop: conf.refCrop || null,
+      refNormalizeMaxCropWidth: conf.refNormalizeMaxCropWidth ?? null,
+      refNormalizeMaxCropHeight: conf.refNormalizeMaxCropHeight ?? null,
+      refHeadFillRatio: conf.refHeadFillRatio ?? null,
+      refSoftOvalOnFlatBackground: conf.refSoftOvalOnFlatBackground === true,
+      refAlwaysSoftOval: conf.refAlwaysSoftOval === true,
+      refAnchor: conf.refAnchor || 'center',
+      refOffsetX: conf.refOffsetX ?? 0.5,
+      refOffsetY: conf.refOffsetY ?? null,
+    },
+    input: summarizeUserImageInput(userImageBase64),
+  };
   // 1. 脸部检测 → 标准化裁剪
   let faceCrop = null;
   let faceDetected = false;
+  let faceBounds = null;
+  let faceDetectionValid = false;
   if (conf.refNormalize) {
     const face = await detectFaceBounds(userImageBase64);
+    faceBounds = face || null;
     if (face) {
       console.log(`[Worker] [refPreprocess] 脸部检测原始值: x=${face.x}% y=${face.y}% w=${face.w}% h=${face.h}%`);
       // 验证检测结果合理性：脸部不应超过图像的 70%，且不应超出边界
       const isValid = face.w <= 70 && face.h <= 70 && (face.x + face.w) <= 100 && (face.y + face.h) <= 100;
+      faceDetectionValid = isValid;
       if (isValid) {
         faceCrop = clampNormalizedReferenceCrop(faceBoundsToCrop(face), conf);
         faceDetected = true;
@@ -434,9 +480,11 @@ async function preprocessReferenceImage(userImageBase64, conf) {
 
   // 2. 下载用户图片原始 Buffer
   let inputBuf;
+  let inputSourceType = 'base64_string';
   if (userImageBase64.startsWith('data:')) {
     const b64 = userImageBase64.replace(/^data:[^;]+;base64,/, '');
     inputBuf = Buffer.from(b64, 'base64');
+    inputSourceType = 'data_url';
   } else if (userImageBase64.startsWith('http')) {
     const http = require('http'), https = require('https');
     inputBuf = await new Promise((res, rej) => {
@@ -453,9 +501,11 @@ async function preprocessReferenceImage(userImageBase64, conf) {
       }).on('error', rej);
     });
     userImageBase64 = `data:image/jpeg;base64,${inputBuf.toString('base64')}`;
+    inputSourceType = 'http_url';
   } else {
     inputBuf = Buffer.from(userImageBase64, 'base64');
   }
+  const inputMeta = await sharp(inputBuf).metadata();
 
   // 3. 判断是否需要处理
   const needsScale = conf.refScale && conf.refScale < 0.999;
@@ -464,10 +514,36 @@ async function preprocessReferenceImage(userImageBase64, conf) {
   const useNormalize = faceCrop && conf.refNormalize;
   const alwaysSoftOval = Boolean(conf.refAlwaysSoftOval);
   const useSoftOval = alwaysSoftOval || (Boolean(conf.refSoftOvalOnFlatBackground) && (useNormalize || await hasFlatLightBorder(inputBuf)));
+  debug.face_detection = {
+    attempted: conf.refNormalize === true,
+    bounds: faceBounds,
+    valid: faceDetectionValid,
+    resolved_crop: faceCrop,
+  };
+  debug.input_meta = {
+    source_type: inputSourceType,
+    width: inputMeta.width || null,
+    height: inputMeta.height || null,
+    format: inputMeta.format || null,
+  };
+  debug.decisions = {
+    needs_scale: Boolean(needsScale),
+    needs_crop: Boolean(needsCrop),
+    use_normalize: Boolean(useNormalize),
+    always_soft_oval: alwaysSoftOval,
+    use_soft_oval: useSoftOval,
+    head_fill_ratio: headFillRatio,
+  };
 
   if (!needsScale && !needsCrop && !useNormalize && !useSoftOval) {
     console.log(`[Worker] [refPreprocess] 无需预处理，使用原始用户照片`);
-    return userImageBase64;
+    debug.outcome = {
+      skipped: true,
+      effective_crop: null,
+      effective_scale: 1,
+      output: summarizeUserImageInput(userImageBase64),
+    };
+    return { imageDataUrl: userImageBase64, debug };
   }
 
   // 4. 构建预处理参考图
@@ -476,8 +552,17 @@ async function preprocessReferenceImage(userImageBase64, conf) {
 
   console.log(`[Worker] [refPreprocess] scale=${effectiveScale.toFixed(3)} crop=${effectiveCrop ? 'yes' : 'no'} softOval=${useSoftOval}`);
 
+  let outputDataUrl;
   if (useSoftOval) {
-    return await toSoftOvalReferenceDataUrl(
+    outputDataUrl = await toSoftOvalReferenceDataUrl(
+      inputBuf, effectiveScale,
+      conf.refAnchor || 'center',
+      conf.refOffsetX ?? 0.5,
+      conf.refOffsetY,
+      effectiveCrop
+    );
+  } else {
+    outputDataUrl = await toScaledReferenceDataUrl(
       inputBuf, effectiveScale,
       conf.refAnchor || 'center',
       conf.refOffsetX ?? 0.5,
@@ -485,13 +570,82 @@ async function preprocessReferenceImage(userImageBase64, conf) {
       effectiveCrop
     );
   }
-  return await toScaledReferenceDataUrl(
-    inputBuf, effectiveScale,
-    conf.refAnchor || 'center',
-    conf.refOffsetX ?? 0.5,
-    conf.refOffsetY,
-    effectiveCrop
-  );
+  debug.outcome = {
+    skipped: false,
+    effective_crop: effectiveCrop,
+    effective_scale: effectiveScale,
+    output: summarizeUserImageInput(outputDataUrl),
+  };
+  return { imageDataUrl: outputDataUrl, debug };
+}
+
+function summarizeResolvedMask(inputW, inputH, mask, outputW, outputH) {
+  if (!mask || !('cx' in mask)) return null;
+  const scaleX = outputW / inputW;
+  const scaleY = outputH / inputH;
+  const summary = {
+    input_size: { width: inputW, height: inputH },
+    output_size: { width: outputW, height: outputH },
+    scale: { x: scaleX, y: scaleY },
+    raw: mask,
+  };
+
+  const isComplex = 'w' in mask && (mask.apiW || mask.apiH || mask.compW || mask.compH || mask.apiCx || mask.apiCy || mask.compCx || mask.compCy);
+  if (!isComplex) {
+    const rx = Math.round(mask.cx * scaleX);
+    const ry = Math.round(mask.cy * scaleY);
+    const rw = Math.round(mask.w * scaleX);
+    const rh = Math.round(mask.h * scaleY);
+    const cLeft = rx - Math.round(rw / 2);
+    const cTop = ry - Math.round(rh / 2);
+    summary.simple_rect = {
+      center: { x: rx, y: ry },
+      size: { width: rw, height: rh },
+      rect: { left: cLeft, top: cTop, right: cLeft + rw, bottom: cTop + rh },
+      comp_feather: mask.compFeather ?? null,
+      comp_solid_top_h: mask.compSolidTopH ?? null,
+    };
+    return summary;
+  }
+
+  const buildBranch = (prefix) => {
+    const cx = Math.round((mask[`${prefix}Cx`] ?? mask.cx) * scaleX);
+    const cy = Math.round((mask[`${prefix}Cy`] ?? mask.cy) * scaleY);
+    const w = Math.round((mask[`${prefix}W`] ?? mask.w) * scaleX);
+    const h = Math.round((mask[`${prefix}H`] ?? mask.h) * scaleY);
+    const left = cx - Math.round(w / 2);
+    const top = cy - Math.round(h / 2);
+    return {
+      shape: mask[`${prefix}Shape`] || 'rect',
+      center: { x: cx, y: cy },
+      size: { width: w, height: h },
+      rect: { left, top, right: left + w, bottom: top + h },
+      clip_bottom_y: resolveMaskClipBottom(mask[`${prefix}MaxBottomY`] ?? mask.maxBottomY, scaleY, outputH),
+      dome_h: mask[`${prefix}DomeH`] ?? null,
+      dome_expand_x: mask[`${prefix}DomeExpandX`] ?? null,
+      side_hair: {
+        width: mask[`${prefix}SideHairW`] ?? null,
+        height: mask[`${prefix}SideHairH`] ?? null,
+        offset_x: mask[`${prefix}SideHairOffsetX`] ?? null,
+        offset_y: mask[`${prefix}SideHairOffsetY`] ?? null,
+      },
+      neck: {
+        rx: mask[`${prefix}NeckRx`] ?? null,
+        ry: mask[`${prefix}NeckRy`] ?? null,
+        offset_y: mask[`${prefix}NeckOffsetY`] ?? null,
+      },
+      body_inset_x: mask[`${prefix}BodyInsetX`] ?? null,
+      no_body_rect: mask[`${prefix}NoBodyRect`] === true,
+    };
+  };
+
+  summary.api = buildBranch('api');
+  summary.composite = {
+    ...buildBranch('comp'),
+    feather: mask.compFeather ?? null,
+    solid_top_h: mask.compSolidTopH ?? null,
+  };
+  return summary;
 }
 
 /**
@@ -823,40 +977,61 @@ function parseSize(sizeStr) {
  */
 async function processFaceswapTask(taskId, task) {
   const t0 = Date.now();
-    const {
-      template_image: defaultTemplateImage,
-      user_images,
-      callback_url,
-      size,
-      target_person: defaultTargetPerson,
-      gender: defaultGender,
-      faceswap_templates,
-      faceswap_strength,
-      faceswap_guidance_scale,
-      faceswap_config: rawSceneConfig,
-    } = task.params;
+  const {
+    template_image: defaultTemplateImage,
+    user_images,
+    callback_url,
+    size,
+    target_person: defaultTargetPerson,
+    gender: defaultGender,
+    faceswap_templates,
+    faceswap_strength,
+    faceswap_guidance_scale,
+    faceswap_config: rawSceneConfig,
+  } = task.params;
 
   // ── 解析 scene-config ──
   const sceneConfig = rawSceneConfig || null;
-  const sceneMode = sceneConfig?.mode || 'faceswap';
+  let sceneMode = sceneConfig?.mode || 'faceswap';
 
   console.log(`[Worker] [faceswap] 开始处理换脸任务: ${taskId} (mode=${sceneMode})`);
   console.log(`[Worker] [faceswap] 球迷照: ${user_images[0]}`);
+
+  await patchTaskDiagnosticsSafe(taskId, {
+    worker: {
+      handler: 'faceswap',
+      started_at: new Date().toISOString(),
+      requested_gender: defaultGender ?? null,
+      initial_scene_mode: sceneMode,
+      callback_url: callback_url || null,
+      task_param_summary: {
+        template_image: defaultTemplateImage || null,
+        target_person: defaultTargetPerson || null,
+        size: size || null,
+        faceswap_strength: faceswap_strength ?? null,
+        faceswap_guidance_scale: faceswap_guidance_scale ?? null,
+        user_images: summarizeUserImageInputs(user_images),
+      },
+    },
+  });
 
   await updateTask(taskId, { status: STATUS.PROCESSING });
 
   try {
     // ── 步骤1: 视觉模型解析用户外貌（含性别检测）──
     let userDescription = '';
+    let visionError = null;
     try {
       userDescription = await describeUserAppearance([user_images[0]]);
       console.log(`[Worker] [faceswap] 用户外貌解析完成: ${userDescription.substring(0, 120)}...`);
     } catch (visionErr) {
+      visionError = visionErr.message;
       console.warn(`[Worker] [faceswap] 用户外貌解析失败，使用 H5 传入的 gender=${defaultGender || 'male'}: ${visionErr.message}`);
     }
 
-    // ── 步骤2: 自动性别识别 → 选择男/女模板 ──
-    const detectedGender = userDescription ? extractGenderFromDescription(userDescription) : (defaultGender || 'male');
+    // ── 步骤2: 性别识别 → 选择男/女模板 ──
+    // 优先使用 H5 传入的 gender，未传时才用视觉模型推断
+    const detectedGender = defaultGender ?? (userDescription ? extractGenderFromDescription(userDescription) : 'male');
     let template_image = defaultTemplateImage;
     let target_person = defaultTargetPerson;
     let template_type = 'faceswap';
@@ -873,10 +1048,12 @@ async function processFaceswapTask(taskId, task) {
 
     // ── 步骤3: 选择 gender 对应的 scene config ──
     let genderSceneConfig = sceneConfig;
-    if (sceneConfig && sceneConfig !== Object(sceneConfig)) {
-      // sceneConfig 可能不是 gender-specific 的对象
+    const autoGenderSceneConfig = faceswap_templates?.[detectedGender]?.scene_config || null;
+    if (autoGenderSceneConfig) {
+      genderSceneConfig = autoGenderSceneConfig;
     }
-    // 如果 sceneConfig 本身就是 gender 分支（已由 route 选择），直接使用
+    sceneMode = genderSceneConfig?.mode || sceneConfig?.mode || 'faceswap';
+    console.log(`[Worker] [faceswap] 使用 ${detectedGender} scene config (mode=${sceneMode})`);
 
     console.log(`[Worker] [faceswap] 模板图: ${template_image}`);
 
@@ -886,19 +1063,54 @@ async function processFaceswapTask(taskId, task) {
     let resolvedStrength   = genderSceneConfig?.strength ?? faceswap_templates?.[detectedGender]?.strength ?? faceswap_strength ?? 0.68;
     if (sceneMode === 'inpaint') resolvedStrength = 1.0;
     const resolvedGuidance = genderSceneConfig?.guidance ?? genderSceneConfig?.guidance_scale ?? faceswap_templates?.[detectedGender]?.guidance_scale ?? faceswap_guidance_scale ?? 10;
+    const controlProfileKey = genderSceneConfig?.controlProfile || null;
+    const controlProfile = controlProfileKey ? (INPAINT_CONTROL_PROFILES[controlProfileKey] || INPAINT_CONTROL_PROFILES.default) : INPAINT_CONTROL_PROFILES.default;
+
+    await patchTaskDiagnosticsSafe(taskId, {
+      worker: {
+        vision: {
+          user_description: userDescription || null,
+          error: visionError,
+        },
+        resolution: {
+          detected_gender: detectedGender,
+          template_image,
+          target_person,
+          template_type,
+          scene_mode: sceneMode,
+          scene_config_label: genderSceneConfig?.label || sceneConfig?.label || null,
+          resolved_size: resolvedSize,
+          resolved_strength: resolvedStrength,
+          resolved_guidance: resolvedGuidance,
+          validate_head_swap: genderSceneConfig?.validateHeadSwap === true,
+          control_profile_key: controlProfileKey,
+        },
+      },
+    });
 
     // ── 步骤3.5: 参考图预处理（refScale/refCrop/refNormalize/softOval）──
     // 将用户照片标准化为统一大小的参考图，避免头部大小不可控
     let processedUserImage = user_images[0];
+    let referencePreprocess = {
+      skipped: true,
+      reason: 'no_ref_preprocess_flags',
+      input: summarizeUserImageInput(user_images[0]),
+      output: summarizeUserImageInput(user_images[0]),
+    };
     if (genderSceneConfig && (genderSceneConfig.refScale || genderSceneConfig.refNormalize || genderSceneConfig.refCrop || genderSceneConfig.refSoftOvalOnFlatBackground || genderSceneConfig.refAlwaysSoftOval)) {
       try {
-        processedUserImage = await preprocessReferenceImage(user_images[0], genderSceneConfig);
+        const preprocessed = await preprocessReferenceImage(user_images[0], genderSceneConfig);
+        processedUserImage = preprocessed.imageDataUrl;
+        referencePreprocess = preprocessed.debug;
         console.log(`[Worker] [faceswap] 参考图预处理完成`);
       } catch (preprocErr) {
         console.error(`[Worker] [faceswap] 参考图预处理失败: ${preprocErr.message}`);
         throw new Error(`参考图预处理失败: ${preprocErr.message}`);
       }
     }
+    await patchTaskDiagnosticsSafe(taskId, {
+      reference_preprocess: referencePreprocess,
+    });
 
     // ── 步骤4: 构建增强 Prompt（含 extraPromptLines + extraNegativeTerms）──
     const { prompt: basePrompt, negative_prompt: baseNegPrompt } = buildFaceswapPrompt({
@@ -911,34 +1123,44 @@ async function processFaceswapTask(taskId, task) {
     // 合并 scene-config 的 extraPromptLines 和 extraNegativeTerms
     let prompt = basePrompt;
     let negative_prompt = baseNegPrompt;
-    const controlProfileKey = genderSceneConfig?.controlProfile || null;
-    const controlProfile = controlProfileKey ? (INPAINT_CONTROL_PROFILES[controlProfileKey] || INPAINT_CONTROL_PROFILES.default) : INPAINT_CONTROL_PROFILES.default;
+    const mergedPromptLines = [
+      ...(Array.isArray(controlProfile?.promptLines) ? controlProfile.promptLines : []),
+      ...(Array.isArray(genderSceneConfig?.extraPromptLines) ? genderSceneConfig.extraPromptLines : []),
+    ];
+    const mergedNegativeTerms = [
+      ...(Array.isArray(controlProfile?.negativeTerms) ? controlProfile.negativeTerms : []),
+      ...(Array.isArray(genderSceneConfig?.extraNegativeTerms) ? genderSceneConfig.extraNegativeTerms : []),
+    ];
 
     if (genderSceneConfig?.extraPromptLines || controlProfile?.promptLines) {
-      const extraLines = [
-        ...(Array.isArray(controlProfile.promptLines) ? controlProfile.promptLines : []),
-        ...(Array.isArray(genderSceneConfig?.extraPromptLines) ? genderSceneConfig.extraPromptLines : []),
-      ];
-      if (extraLines.length > 0) {
-        prompt += '\n' + extraLines.join('\n');
+      if (mergedPromptLines.length > 0) {
+        prompt += '\n' + mergedPromptLines.join('\n');
       }
     }
     if (genderSceneConfig?.extraNegativeTerms || controlProfile?.negativeTerms) {
-      const extraNeg = [
-        ...(Array.isArray(controlProfile.negativeTerms) ? controlProfile.negativeTerms : []),
-        ...(Array.isArray(genderSceneConfig?.extraNegativeTerms) ? genderSceneConfig.extraNegativeTerms : []),
-      ];
-      if (extraNeg.length > 0) {
-        negative_prompt += ', ' + extraNeg.join(', ');
+      if (mergedNegativeTerms.length > 0) {
+        negative_prompt += ', ' + mergedNegativeTerms.join(', ');
       }
     }
     console.log(`[Worker] [faceswap] Prompt: ${prompt.length} 字符 (mode=${sceneMode}, gender=${detectedGender}, type=${template_type})`);
+    await patchTaskDiagnosticsSafe(taskId, {
+      prompt: {
+        base_prompt: basePrompt,
+        prompt,
+        base_negative_prompt: baseNegPrompt,
+        negative_prompt,
+        control_profile_key: controlProfileKey,
+        applied_prompt_lines: mergedPromptLines,
+        applied_negative_terms: mergedNegativeTerms,
+      },
+    });
 
     // ── 步骤5: 生成图片 ──
     // 对于 inpaint 模式，构建 API mask + 预填充底图
     let apiMaskBase64 = null;
     let preFilledTemplate = template_image; // 默认用原始底图 URL
     let tplOrigW = null, tplOrigH = null; // 模板图原始尺寸（mask 坐标基于此）
+    let resolvedMaskSummary = null;
     if ((sceneMode === 'inpaint') && genderSceneConfig?.mask) {
       try {
         const { w: outW, h: outH } = parseSize(resolvedSize);
@@ -962,6 +1184,7 @@ async function processFaceswapTask(taskId, task) {
         tplOrigW = tplMeta.width;
         tplOrigH = tplMeta.height;
         console.log(`[Worker] [faceswap] 底图原始尺寸: ${tplOrigW}x${tplOrigH} → 输出: ${outW}x${outH}`);
+        resolvedMaskSummary = summarizeResolvedMask(tplOrigW, tplOrigH, maskConfig, outW, outH);
 
         // 构建 API mask（用底图原始尺寸作为 input，缩放到输出尺寸）
         const { apiBuf } = await buildSceneMask(tplOrigW, tplOrigH, maskConfig, outW, outH);
@@ -993,142 +1216,202 @@ async function processFaceswapTask(taskId, task) {
         throw new Error(`inpaint mask 构建失败: ${maskErr.message}`);
       }
     }
+    if (!resolvedMaskSummary && genderSceneConfig?.mask) {
+      resolvedMaskSummary = {
+        raw: genderSceneConfig.mask,
+        pending_resolution: true,
+      };
+    }
+    await patchTaskDiagnosticsSafe(taskId, {
+      mask: resolvedMaskSummary,
+    });
+
     // ── 步骤5-7: 生成 + 后处理 + 验证（含重试） ──
-    const MAX_GENERATE_ATTEMPTS = 2;
+    const MAX_GENERATE_ATTEMPTS = 3;
     let imageResult, finalUrl, compositeUsed;
 
     for (let attempt = 0; attempt < MAX_GENERATE_ATTEMPTS; attempt++) {
-      // ── 步骤5: 生成图片 ──
-      if (sceneMode === 'inpaint' && apiMaskBase64) {
-        // inpaint 模式：直接 API 调用，匹配测试文件的 payload 结构
-        const INPAINT_API_URL = process.env.SEEDREAM_NATIVE_API_URL || 'https://ark.cn-beijing.volces.com/api/v3/images/generations';
-        const INPAINT_MODEL = process.env.SEEDREAM_NATIVE_MODEL || 'doubao-seedream-4-5-251128';
-        const INPAINT_API_KEY = process.env.SEEDREAM_NATIVE_API_KEY;
-
-        console.log(`[Worker] [faceswap] inpaint 直接调用 (attempt ${attempt + 1}/${MAX_GENERATE_ATTEMPTS})`);
-
-        const inpaintPayload = {
-          model: INPAINT_MODEL,
-          prompt,
-          negative_prompt,
-          image: [preFilledTemplate, processedUserImage],
-          mask_image: apiMaskBase64,
+      const attemptStartedAt = Date.now();
+      const attemptIndex = attempt + 1;
+      const attemptDiagnostics = {
+        attempt: attemptIndex,
+        max_attempts: MAX_GENERATE_ATTEMPTS,
+        started_at: new Date().toISOString(),
+        mode: sceneMode,
+        generation_path: sceneMode === 'inpaint' && apiMaskBase64 ? 'inpaint_direct' : 'native_generate',
+        request: {
+          size: resolvedSize,
           strength: resolvedStrength,
           guidance_scale: resolvedGuidance,
-          response_format: 'url',
-          size: resolvedSize,
-          stream: false,
-        };
+          mask_present: Boolean(apiMaskBase64),
+          template_input: summarizeUserImageInput(preFilledTemplate),
+          processed_user_image: summarizeUserImageInput(processedUserImage),
+        },
+      };
 
-        const inpaintRes = await axios.post(INPAINT_API_URL, inpaintPayload, {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${INPAINT_API_KEY}`,
-          },
-          timeout: 180000,
-        }).catch(err => {
-          const errData = err.response?.data;
-          if (errData?.error) {
-            const e = errData.error;
-            throw new Error(`Seedream Inpaint API [${e.code || ''}]: ${e.message || JSON.stringify(e)}`);
-          }
-          throw err;
-        });
-
-        if (inpaintRes.data?.error) {
-          throw new Error(`Seedream Inpaint API [${inpaintRes.data.error.code || ''}]: ${inpaintRes.data.error.message || JSON.stringify(inpaintRes.data.error)}`);
-        }
-        const urls = (inpaintRes.data?.data || []).map(item => item.url).filter(Boolean);
-        if (urls.length === 0) {
-          throw new Error('Seedream Inpaint 未返回图片 URL');
-        }
-        imageResult = { url: urls[0], urls };
-      } else {
-        // 非 inpaint 模式：使用标准 generateNativeImage
-        imageResult = await generateNativeImage({
-          prompt,
-          negative_prompt,
-          images: [preFilledTemplate, processedUserImage],
-          size: resolvedSize,
-          mask_image: apiMaskBase64,
-          scene_params: {
-            strength:        resolvedStrength,
-            guidance_scale:  resolvedGuidance,
-          },
-        });
-      }
-      console.log(`[Worker] [faceswap] 生成成功 (attempt ${attempt + 1}/${MAX_GENERATE_ATTEMPTS}, ${Date.now() - t0}ms): ${imageResult.url.substring(0, 80)}...`);
-
-      // ── 步骤6: 后处理（根据 mode 分支）──
-      finalUrl = imageResult.url;
-      compositeUsed = false;
-
-      if ((sceneMode === 'faceswap-composite' || sceneMode === 'inpaint') && genderSceneConfig?.mask && !genderSceneConfig.skipComposite) {
+      // ── 步骤5: 生成图片 ──
         try {
-          const { w: outW, h: outH } = parseSize(resolvedSize);
-          let maskInputW = tplOrigW, maskInputH = tplOrigH;
-          // 如果步骤5没有获取底图尺寸（faceswap-composite 不走步骤5的 inpaint 分支），需要获取
-          if (!maskInputW || !maskInputH) {
-            const http = require('http');
-            const https = require('https');
-            const downloadToBufForMeta = (url) => new Promise((res, rej) => {
-              const c = url.startsWith('https') ? https : http;
-              c.get(url, r => {
-                if (r.statusCode === 301 || r.statusCode === 302) return downloadToBufForMeta(r.headers.location).then(res).catch(rej);
-                const chunks = [];
-                r.on('data', c => chunks.push(c));
-                r.on('end', () => res(Buffer.concat(chunks)));
-              }).on('error', rej);
+          if (sceneMode === 'inpaint' && apiMaskBase64) {
+            // inpaint 模式：直接 API 调用，匹配测试文件的 payload 结构
+            const INPAINT_API_URL = process.env.SEEDREAM_NATIVE_API_URL || 'https://ark.cn-beijing.volces.com/api/v3/images/generations';
+            const INPAINT_MODEL = process.env.SEEDREAM_NATIVE_MODEL || 'doubao-seedream-4-5-251128';
+            const INPAINT_API_KEY = process.env.SEEDREAM_NATIVE_API_KEY;
+
+            attemptDiagnostics.request.model = INPAINT_MODEL;
+            console.log(`[Worker] [faceswap] inpaint 直接调用 (attempt ${attemptIndex}/${MAX_GENERATE_ATTEMPTS})`);
+
+            const inpaintPayload = {
+              model: INPAINT_MODEL,
+              prompt,
+              negative_prompt,
+              image: [preFilledTemplate, processedUserImage],
+              mask_image: apiMaskBase64,
+              strength: resolvedStrength,
+              guidance_scale: resolvedGuidance,
+              response_format: 'url',
+              size: resolvedSize,
+              stream: false,
+            };
+
+            const inpaintRes = await axios.post(INPAINT_API_URL, inpaintPayload, {
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${INPAINT_API_KEY}`,
+              },
+              timeout: 180000,
+            }).catch(err => {
+              const errData = err.response?.data;
+              if (errData?.error) {
+                const e = errData.error;
+                throw new Error(`Seedream Inpaint API [${e.code || ''}]: ${e.message || JSON.stringify(e)}`);
+              }
+              throw err;
             });
-            const tplBufForMeta = await downloadToBufForMeta(template_image);
-            const tplMeta = await sharp(tplBufForMeta).metadata();
-            maskInputW = tplMeta.width;
-            maskInputH = tplMeta.height;
-          }
-          console.log(`[Worker] [faceswap] composite mask: 底图 ${maskInputW}x${maskInputH} → 输出 ${outW}x${outH}`);
-          const { compBuf } = await buildSceneMask(maskInputW, maskInputH, genderSceneConfig.mask, outW, outH);
-          if (compBuf) {
-            const finalPath = await compositeWithMask(template_image, imageResult.url, compBuf, outW, outH, taskId);
-            finalUrl = `file://${finalPath}`;
-            compositeUsed = true;
-            console.log(`[Worker] [faceswap] ${sceneMode} composite 完成`);
-          }
-        } catch (compErr) {
-          console.error(`[Worker] [faceswap] ${sceneMode} composite 失败，任务终止: ${compErr.message}`);
-          throw new Error(`${sceneMode} composite 后处理失败: ${compErr.message}`);
-        }
-      }
 
-      // ── 步骤7: 可选验证 ──
-      let validationFailed = false;
-      if (genderSceneConfig?.validateHeadSwap && compositeUsed) {
-        try {
-          const finalPath = finalUrl.replace('file://', '');
-          const finalBuf = await fsp.readFile(finalPath);
-          const validation = await validateHeadSwapResult(
-            `data:image/jpeg;base64,${finalBuf.toString('base64')}`,
-            genderSceneConfig.label || `Scene ${task.params.faceswap_scene}`,
-            genderSceneConfig.validationTarget || target_person,
-            genderSceneConfig.validationRule || ''
-          );
-          if (validation.ok && !validation.skipped) {
-            console.log(`[Worker] [faceswap] 验证通过: ${validation.reason}`);
-          } else if (!validation.ok) {
-            if (attempt < MAX_GENERATE_ATTEMPTS - 1) {
-              console.warn(`[Worker] [faceswap] 验证失败 (attempt ${attempt + 1}), 准备重试生成: ${validation.reason}`);
-              validationFailed = true;
-            } else {
-              console.error(`[Worker] [faceswap] 验证失败 (第 ${attempt + 1} 次生成，已达最大重试次数): ${validation.reason}`);
-              throw new Error(`换脸结果验证失败: ${validation.reason}`);
+            if (inpaintRes.data?.error) {
+              throw new Error(`Seedream Inpaint API [${inpaintRes.data.error.code || ''}]: ${inpaintRes.data.error.message || JSON.stringify(inpaintRes.data.error)}`);
+            }
+            const urls = (inpaintRes.data?.data || []).map(item => item.url).filter(Boolean);
+            if (urls.length === 0) {
+              throw new Error('Seedream Inpaint 未返回图片 URL');
+            }
+            imageResult = { url: urls[0], urls };
+          } else {
+            // 非 inpaint 模式：使用标准 generateNativeImage
+            imageResult = await generateNativeImage({
+              prompt,
+              negative_prompt,
+              images: [preFilledTemplate, processedUserImage],
+              size: resolvedSize,
+              mask_image: apiMaskBase64,
+              scene_params: {
+                strength:        resolvedStrength,
+                guidance_scale:  resolvedGuidance,
+              },
+            });
+          }
+          attemptDiagnostics.generation = {
+            output_url: imageResult.url,
+            urls_count: Array.isArray(imageResult.urls) ? imageResult.urls.length : 0,
+          };
+          console.log(`[Worker] [faceswap] 生成成功 (attempt ${attemptIndex}/${MAX_GENERATE_ATTEMPTS}, ${Date.now() - t0}ms): ${imageResult.url.substring(0, 80)}...`);
+
+          // ── 步骤6: 后处理（根据 mode 分支）──
+          finalUrl = imageResult.url;
+          compositeUsed = false;
+
+          if ((sceneMode === 'faceswap-composite' || sceneMode === 'inpaint') && genderSceneConfig?.mask && !genderSceneConfig.skipComposite) {
+            const { w: outW, h: outH } = parseSize(resolvedSize);
+            let maskInputW = tplOrigW, maskInputH = tplOrigH;
+            // 如果步骤5没有获取底图尺寸（faceswap-composite 不走步骤5的 inpaint 分支），需要获取
+            if (!maskInputW || !maskInputH) {
+              const http = require('http');
+              const https = require('https');
+              const downloadToBufForMeta = (url) => new Promise((res, rej) => {
+                const c = url.startsWith('https') ? https : http;
+                c.get(url, r => {
+                  if (r.statusCode === 301 || r.statusCode === 302) return downloadToBufForMeta(r.headers.location).then(res).catch(rej);
+                  const chunks = [];
+                  r.on('data', c => chunks.push(c));
+                  r.on('end', () => res(Buffer.concat(chunks)));
+                }).on('error', rej);
+              });
+              const tplBufForMeta = await downloadToBufForMeta(template_image);
+              const tplMeta = await sharp(tplBufForMeta).metadata();
+              maskInputW = tplMeta.width;
+              maskInputH = tplMeta.height;
+            }
+            if (!resolvedMaskSummary && genderSceneConfig?.mask) {
+              resolvedMaskSummary = summarizeResolvedMask(maskInputW, maskInputH, genderSceneConfig.mask, outW, outH);
+              await patchTaskDiagnosticsSafe(taskId, { mask: resolvedMaskSummary });
+            }
+            console.log(`[Worker] [faceswap] composite mask: 底图 ${maskInputW}x${maskInputH} → 输出 ${outW}x${outH}`);
+            const { compBuf } = await buildSceneMask(maskInputW, maskInputH, genderSceneConfig.mask, outW, outH);
+            if (compBuf) {
+              const finalPath = await compositeWithMask(template_image, imageResult.url, compBuf, outW, outH, taskId);
+              finalUrl = `file://${finalPath}`;
+              compositeUsed = true;
+              console.log(`[Worker] [faceswap] ${sceneMode} composite 完成`);
             }
           }
-        } catch (valErr) {
-          if (valErr.message.startsWith('换脸结果验证失败')) throw valErr;
-          console.warn(`[Worker] [faceswap] 验证 API 调用异常，跳过验证: ${valErr.message}`);
-        }
-      }
+          attemptDiagnostics.postprocess = {
+            composite_used: compositeUsed,
+            skip_composite: genderSceneConfig?.skipComposite === true,
+            final_url: finalUrl,
+          };
 
-      if (!validationFailed) break;
+          // ── 步骤7: 可选验证 ──
+          let validationFailed = false;
+          if (genderSceneConfig?.validateHeadSwap && compositeUsed) {
+            try {
+              const finalPath = finalUrl.replace('file://', '');
+              const finalBuf = await fsp.readFile(finalPath);
+              const validation = await validateHeadSwapResult(
+                `data:image/jpeg;base64,${finalBuf.toString('base64')}`,
+                genderSceneConfig.label || `Scene ${task.params.faceswap_scene}`,
+                genderSceneConfig.validationTarget || target_person,
+                genderSceneConfig.validationRule || ''
+              );
+              attemptDiagnostics.validation = validation;
+              if (validation.ok && !validation.skipped) {
+                console.log(`[Worker] [faceswap] 验证通过: ${validation.reason}`);
+              } else if (!validation.ok) {
+                if (attempt < MAX_GENERATE_ATTEMPTS - 1) {
+                  console.warn(`[Worker] [faceswap] 验证失败 (attempt ${attemptIndex}), 准备重试生成: ${validation.reason}`);
+                  validationFailed = true;
+                } else {
+                  console.error(`[Worker] [faceswap] 验证失败 (第 ${attemptIndex} 次生成，已达最大重试次数): ${validation.reason}`);
+                  throw new Error(`换脸结果验证失败: ${validation.reason}`);
+                }
+              }
+            } catch (valErr) {
+              if (valErr.message.startsWith('换脸结果验证失败')) throw valErr;
+              attemptDiagnostics.validation = {
+                ok: true,
+                skipped: true,
+                reason: valErr.message,
+              };
+              console.warn(`[Worker] [faceswap] 验证 API 调用异常，跳过验证: ${valErr.message}`);
+            }
+          }
+
+          attemptDiagnostics.completed_at = new Date().toISOString();
+          attemptDiagnostics.elapsed_ms = Date.now() - attemptStartedAt;
+          attemptDiagnostics.outcome = validationFailed ? 'retry_validation_failed' : 'accepted';
+          await appendTaskDiagnosticsSafe(taskId, 'attempts', attemptDiagnostics);
+
+          if (!validationFailed) break;
+        } catch (attemptErr) {
+          attemptDiagnostics.completed_at = new Date().toISOString();
+          attemptDiagnostics.elapsed_ms = Date.now() - attemptStartedAt;
+          attemptDiagnostics.outcome = 'error';
+          attemptDiagnostics.error = attemptErr.message;
+          await appendTaskDiagnosticsSafe(taskId, 'attempts', attemptDiagnostics);
+          if (attemptErr.message.includes('composite')) {
+            console.error(`[Worker] [faceswap] ${sceneMode} composite 失败，任务终止: ${attemptErr.message}`);
+          }
+          throw attemptErr;
+        }
     }
 
     // ── 兼容原有 RegionSync ──
@@ -1201,6 +1484,19 @@ async function processFaceswapTask(taskId, task) {
         region_sync: task.params.enable_region_sync === true,
       }],
     });
+    await patchTaskDiagnosticsSafe(taskId, {
+      final_result: {
+        status: STATUS.COMPLETED,
+        completed_at: new Date().toISOString(),
+        localized_image_url: callbackUrl_image,
+        original_generated_url: imageResult?.url || null,
+        scene_mode: sceneMode,
+        composite_used: compositeUsed,
+        user_description: userDescription || null,
+        region_sync: task.params.enable_region_sync === true,
+        total_elapsed_ms: Date.now() - t0,
+      },
+    });
 
     await callbackH5WithRetry(callback_url, {
       task_id: taskId,
@@ -1212,6 +1508,14 @@ async function processFaceswapTask(taskId, task) {
     console.error(`[Worker] [faceswap] 任务失败: ${taskId} (${Date.now() - t0}ms)`, err.message);
 
     await updateTask(taskId, { status: STATUS.FAILED, error: err.message });
+    await patchTaskDiagnosticsSafe(taskId, {
+      final_result: {
+        status: STATUS.FAILED,
+        failed_at: new Date().toISOString(),
+        error: err.message,
+        total_elapsed_ms: Date.now() - t0,
+      },
+    });
 
     try {
       await callbackH5WithRetry(callback_url, {
@@ -1234,12 +1538,20 @@ async function processScene1V3Task(taskId, task) {
   const { callback_url, user_images, user_image, gender } = task.params;
 
   console.log(`[Worker] [scene1v3] start: ${taskId}`);
+  const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
+    ? user_images
+    : [user_image].filter(Boolean);
+  await patchTaskDiagnosticsSafe(taskId, {
+    worker: {
+      handler: 'scene1_v3',
+      started_at: new Date().toISOString(),
+      requested_gender: gender || null,
+      runtime_task_dir: path.join(SCENE1_V3_RUNTIME_ROOT, taskId),
+      user_images: summarizeUserImageInputs(resolvedUserImages),
+    },
+  });
 
   try {
-    const resolvedUserImages = (Array.isArray(user_images) && user_images.length > 0)
-      ? user_images
-      : [user_image].filter(Boolean);
-
     const result = await runScene1V3Pipeline({
       taskId,
       userImages: resolvedUserImages,
@@ -1263,6 +1575,25 @@ async function processScene1V3Task(taskId, task) {
         traits: result.traits,
       }],
     });
+    await patchTaskDiagnosticsSafe(taskId, {
+      scene1_v3: {
+        runtime_task_dir: path.join(SCENE1_V3_RUNTIME_ROOT, taskId),
+        result_json_path: path.join(SCENE1_V3_RUNTIME_ROOT, taskId, 'result.json'),
+        scene_id: result.sceneId,
+        traits: result.traits,
+        selected_model: result.selectedModel,
+        llm_winner: result.llmWinner,
+        llm_score_4_5: result.llmScore45,
+        llm_score_5_0: result.llmScore50,
+        fallback_best_score: result.fallbackBestScore,
+      },
+      final_result: {
+        status: STATUS.COMPLETED,
+        completed_at: new Date().toISOString(),
+        localized_image_url: callbackUrlImage,
+        total_elapsed_ms: Date.now() - t0,
+      },
+    });
 
     await callbackH5WithRetry(callback_url, {
       task_id: taskId,
@@ -1274,6 +1605,14 @@ async function processScene1V3Task(taskId, task) {
     console.error(`[Worker] [scene1v3] failed: ${taskId} (${Date.now() - t0}ms)`, err.message);
 
     await updateTask(taskId, { status: STATUS.FAILED, error: err.message });
+    await patchTaskDiagnosticsSafe(taskId, {
+      final_result: {
+        status: STATUS.FAILED,
+        failed_at: new Date().toISOString(),
+        error: err.message,
+        total_elapsed_ms: Date.now() - t0,
+      },
+    });
 
     try {
       await callbackH5WithRetry(callback_url, {

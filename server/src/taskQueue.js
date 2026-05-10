@@ -14,6 +14,8 @@ const STATUS = {
   FAILED: 'failed',
 };
 
+const TASK_QUEUE_MODE = (process.env.TASK_QUEUE_MODE || 'redis').toLowerCase();
+const USE_MEMORY_QUEUE = TASK_QUEUE_MODE === 'memory';
 const QUEUE_NAME = process.env.BULLMQ_QUEUE_NAME || 'fan-photo-synthesis';
 const TASK_KEY_PREFIX = process.env.REDIS_TASK_KEY_PREFIX || 'fan-photo:task:';
 const TASK_RETENTION_SECONDS = Math.max(60, Number(process.env.TASK_RETENTION_SECONDS) || 2 * 60 * 60);
@@ -28,6 +30,49 @@ let queueConnection = null;
 let queue = null;
 let workerConnection = null;
 let worker = null;
+let memoryProcessor = null;
+let memoryWorkerStarted = false;
+const memoryTasks = new Map();
+const memoryQueue = [];
+let memoryActiveCount = 0;
+
+async function drainMemoryQueue() {
+  if (!USE_MEMORY_QUEUE || !memoryProcessor) {
+    return;
+  }
+
+  while (memoryActiveCount < WORKER_CONCURRENCY && memoryQueue.length > 0) {
+    const taskId = memoryQueue.shift();
+    memoryActiveCount += 1;
+
+    setImmediate(async () => {
+      try {
+        await updateTask(taskId, {
+          status: STATUS.PROCESSING,
+          error: null,
+        });
+        await memoryProcessor(taskId);
+      } catch (err) {
+        try {
+          const task = await getTask(taskId);
+          if (task && task.status !== STATUS.COMPLETED) {
+            await updateTask(taskId, {
+              status: STATUS.FAILED,
+              error: err.message,
+            });
+          }
+        } catch (updateErr) {
+          console.error(`[TaskQueue] 内存队列标记失败异常: ${updateErr.message}`);
+        }
+      } finally {
+        memoryActiveCount = Math.max(0, memoryActiveCount - 1);
+        drainMemoryQueue().catch((err) => {
+          console.error(`[TaskQueue] 内存队列 drain 异常: ${err.message}`);
+        });
+      }
+    });
+  }
+}
 
 function createRedisClient({ workerMode = false } = {}) {
   const sharedOptions = {
@@ -205,6 +250,16 @@ function deserializeTaskRecord(record) {
 }
 
 async function setTaskRecord(taskId, record) {
+  if (USE_MEMORY_QUEUE) {
+    const existing = memoryTasks.get(taskId) || {};
+    const merged = {
+      ...existing,
+      ...record,
+    };
+    memoryTasks.set(taskId, JSON.parse(JSON.stringify(merged)));
+    return;
+  }
+
   const redis = await ensureTaskRedis();
   const key = buildTaskKey(taskId);
   const payload = serializeTaskRecord(record);
@@ -231,12 +286,31 @@ async function createTask(params) {
 }
 
 async function getTask(taskId) {
+  if (USE_MEMORY_QUEUE) {
+    const record = memoryTasks.get(taskId);
+    return record ? JSON.parse(JSON.stringify(record)) : null;
+  }
+
   const redis = await ensureTaskRedis();
   const data = await redis.hgetall(buildTaskKey(taskId));
   return deserializeTaskRecord(data);
 }
 
 async function updateTask(taskId, updates) {
+  if (USE_MEMORY_QUEUE) {
+    const existing = memoryTasks.get(taskId);
+    if (!existing) {
+      return null;
+    }
+    const next = {
+      ...existing,
+      ...updates,
+      updated_at: Date.now(),
+    };
+    memoryTasks.set(taskId, JSON.parse(JSON.stringify(next)));
+    return getTask(taskId);
+  }
+
   const redis = await ensureTaskRedis();
   const key = buildTaskKey(taskId);
   const exists = await redis.exists(key);
@@ -256,6 +330,14 @@ async function updateTask(taskId, updates) {
 }
 
 async function enqueueTask(taskId) {
+  if (USE_MEMORY_QUEUE) {
+    memoryQueue.push(taskId);
+    drainMemoryQueue().catch((err) => {
+      console.error(`[TaskQueue] 内存队列入队异常: ${err.message}`);
+    });
+    return STATUS.PENDING;
+  }
+
   const synthesisQueue = await ensureQueue();
 
   await synthesisQueue.add(
@@ -268,10 +350,29 @@ async function enqueueTask(taskId) {
 }
 
 async function initTaskQueue() {
+  if (USE_MEMORY_QUEUE) {
+    console.log(`[TaskQueue] 使用内存队列模式: concurrency=${WORKER_CONCURRENCY}`);
+    return;
+  }
   await ensureQueue();
 }
 
 async function startSynthesisWorker(processor) {
+  if (USE_MEMORY_QUEUE) {
+    memoryProcessor = processor;
+    memoryWorkerStarted = true;
+    console.log(`[TaskQueue] 内存 Worker 已启动: queue=${QUEUE_NAME}, concurrency=${WORKER_CONCURRENCY}`);
+    drainMemoryQueue().catch((err) => {
+      console.error(`[TaskQueue] 内存 Worker drain 异常: ${err.message}`);
+    });
+    return {
+      mode: 'memory',
+      close: async () => {
+        memoryWorkerStarted = false;
+      },
+    };
+  }
+
   if (worker) {
     return worker;
   }
@@ -337,6 +438,15 @@ async function startSynthesisWorker(processor) {
 }
 
 async function closeTaskQueue() {
+  if (USE_MEMORY_QUEUE) {
+    memoryProcessor = null;
+    memoryWorkerStarted = false;
+    memoryQueue.length = 0;
+    memoryTasks.clear();
+    memoryActiveCount = 0;
+    return;
+  }
+
   const closers = [];
 
   if (worker) {
@@ -379,12 +489,14 @@ async function closeTaskQueue() {
 
 function getQueueConfig() {
   return {
+    mode: USE_MEMORY_QUEUE ? 'memory' : 'redis',
     queue_name: QUEUE_NAME,
     concurrency: WORKER_CONCURRENCY,
     retention_seconds: TASK_RETENTION_SECONDS,
-    redis_url: process.env.REDIS_URL ? 'configured' : null,
-    redis_host: process.env.REDIS_URL ? null : (process.env.REDIS_HOST || '127.0.0.1'),
-    redis_port: process.env.REDIS_URL ? null : (Number(process.env.REDIS_PORT) || 6379),
+    redis_url: USE_MEMORY_QUEUE ? null : (process.env.REDIS_URL ? 'configured' : null),
+    redis_host: USE_MEMORY_QUEUE ? null : (process.env.REDIS_URL ? null : (process.env.REDIS_HOST || '127.0.0.1')),
+    redis_port: USE_MEMORY_QUEUE ? null : (process.env.REDIS_URL ? null : (Number(process.env.REDIS_PORT) || 6379)),
+    worker_started: USE_MEMORY_QUEUE ? memoryWorkerStarted : undefined,
   };
 }
 

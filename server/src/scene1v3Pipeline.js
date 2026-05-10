@@ -22,13 +22,12 @@ const {
 const execFileAsync = promisify(execFile);
 
 const PROJECT_DIR = path.resolve(__dirname, '..', '..');
-const RUNTIME_ROOT = path.resolve(__dirname, '..', '.runtime', 'scene1v3');
 const DEFAULT_FETCH_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_REVIEW_ATTEMPTS = 3;
 const DEFAULT_STAGE_ATTEMPTS = 5;
 const DEFAULT_VISION_MODEL = 'doubao-seed-2-0-pro';
 
-const STAGE_A_MASK_REGIONS = {
+const SCENE1_STAGE_A_MASK_REGIONS = {
   male: [{ id: 'head_hair_neck', x: 0.52, y: 0.29, width: 0.17, height: 0.23, shape: 'ellipse', feather: 18 }],
   female: [{ id: 'head_hair_neck', x: 0.49, y: 0.25, width: 0.22, height: 0.28, shape: 'ellipse', feather: 18 }],
 };
@@ -52,7 +51,7 @@ const MODELS = {
   },
 };
 
-const STAGE_A_DARK_INNER_COLLAR_GUARDS = [
+const SCENE1_STAGE_A_DARK_INNER_COLLAR_GUARDS = [
   {
     id: 'central_white_undershirt_collar_dark_intrusion',
     x: 0.600,
@@ -63,7 +62,7 @@ const STAGE_A_DARK_INNER_COLLAR_GUARDS = [
   },
 ];
 
-const STAGE_A_REVIEW_PROMPT = `You are evaluating two AI-generated locker-room photos for direct fixed-region paste quality.
+const SCENE1_STAGE_A_REVIEW_PROMPT = `You are evaluating two AI-generated locker-room photos for direct fixed-region paste quality.
 
 Scene context: Paulaner locker room. A faceless mannequin sits on a bench in the center bay, wearing a red-and-white FC Bayern jersey, holding a Paulaner beer glass.
 
@@ -121,6 +120,8 @@ Return JSON ONLY - no markdown, no preamble:
   "reason": "one sentence"
 }`;
 
+const RUNTIME_ROOT = path.resolve(__dirname, '..', '.runtime', 'scene1v3');
+
 async function runScene1V3Pipeline({ taskId, userImages = [], genderHint = null }) {
   if (!Array.isArray(userImages) || userImages.length === 0) {
     throw new Error('scene1v3 requires at least one user image');
@@ -155,7 +156,7 @@ async function runScene1V3Pipeline({ taskId, userImages = [], genderHint = null 
   await createMask({
     sourceImage: baseImagePath,
     outputImage: maskImagePath,
-    regions: STAGE_A_MASK_REGIONS[traits.gender || 'male'] || STAGE_A_MASK_REGIONS.male,
+    regions: SCENE1_STAGE_A_MASK_REGIONS[traits.gender || 'male'] || SCENE1_STAGE_A_MASK_REGIONS.male,
   });
 
   const prompts = buildUserPrompts(
@@ -194,8 +195,14 @@ async function runScene1V3Pipeline({ taskId, userImages = [], genderHint = null 
     baseImage: baseImagePath,
     userImage: userImagePath,
     label: taskId,
+    reviewPrompt: SCENE1_STAGE_A_REVIEW_PROMPT,
   });
-  review = await applyDeterministicStageGuards({ review, stageAImages, label: taskId });
+  review = await applyDeterministicStageGuards({
+    review,
+    stageAImages,
+    label: taskId,
+    guards: SCENE1_STAGE_A_DARK_INNER_COLLAR_GUARDS,
+  });
   await fsp.writeFile(path.join(reviewDir, 'stage_a_review.json'), `${JSON.stringify(review, null, 2)}\n`);
 
   let candidates = buildStageCandidates(review, stageAImages);
@@ -317,25 +324,25 @@ async function requestAndSaveStageA({ model, prompts, baseImage, userImage, mask
   throw lastError;
 }
 
-async function reviewStageASafe({ image45, image50, baseImage, userImage, label }) {
+async function reviewStageASafe({ image45, image50, baseImage, userImage, label, reviewPrompt, logTag = 'scene1v3' }) {
   let lastError;
   for (let attempt = 1; attempt <= DEFAULT_REVIEW_ATTEMPTS; attempt += 1) {
     try {
       return await callVisionJson({
-        prompt: STAGE_A_REVIEW_PROMPT,
+        prompt: reviewPrompt,
         images: [image45, image50, baseImage, userImage],
       });
     } catch (error) {
       lastError = error;
       if (attempt < DEFAULT_REVIEW_ATTEMPTS) {
         const delayMs = Math.min(5000 * attempt, 15000);
-        console.error(`[scene1v3] review ${label} attempt ${attempt}/${DEFAULT_REVIEW_ATTEMPTS}: ${redactSecrets(error.message)}; retry in ${delayMs / 1000}s`);
+        console.error(`[${logTag}] review ${label} attempt ${attempt}/${DEFAULT_REVIEW_ATTEMPTS}: ${redactSecrets(error.message)}; retry in ${delayMs / 1000}s`);
         await sleep(delayMs);
       }
     }
   }
 
-  console.error(`[scene1v3] review ${label} failed: ${redactSecrets(lastError.message)}`);
+  console.error(`[${logTag}] review ${label} failed: ${redactSecrets(lastError.message)}`);
   return {
     result_4_5: strictFallbackReview(0),
     result_5_0: strictFallbackReview(0),
@@ -434,11 +441,14 @@ function passesStageVisualQuality(result) {
     && (result.score ?? 0) >= 8;
 }
 
-async function applyDeterministicStageGuards({ review, stageAImages, label }) {
+async function applyDeterministicStageGuards({ review, stageAImages, label, guards = [], logTag = 'scene1v3' }) {
+  if (!Array.isArray(guards) || guards.length === 0) {
+    return review;
+  }
   const findings = {};
   await Promise.all(
     Object.entries(stageAImages).map(async ([modelId, imagePath]) => {
-      const darkCollar = await inspectDarkInnerCollar(imagePath).catch((error) => ({
+      const darkCollar = await inspectDarkInnerCollar(imagePath, guards).catch((error) => ({
         failed: false,
         warning: redactSecrets(error.message),
       }));
@@ -449,7 +459,7 @@ async function applyDeterministicStageGuards({ review, stageAImages, label }) {
           guard: darkCollar,
         }];
       } else if (darkCollar.warning) {
-        console.warn(`[scene1v3] guard ${label}/${modelId}: ${darkCollar.warning}`);
+        console.warn(`[${logTag}] guard ${label}/${modelId}: ${darkCollar.warning}`);
       }
     })
   );
@@ -584,13 +594,13 @@ function alphaForRectRegion(region, localX, localY) {
   return Math.max(0, Math.min(1, distance / region.feather));
 }
 
-async function inspectDarkInnerCollar(imagePath) {
+async function inspectDarkInnerCollar(imagePath, guards = SCENE1_STAGE_A_DARK_INNER_COLLAR_GUARDS) {
   const dimensions = await getImageDimensions(imagePath);
   const rgb = await readRgbFrame(imagePath, dimensions);
-  return detectDarkInnerCollarFromRgb(rgb, dimensions);
+  return detectDarkInnerCollarFromRgb(rgb, dimensions, guards);
 }
 
-function detectDarkInnerCollarFromRgb(rgb, dimensions, guards = STAGE_A_DARK_INNER_COLLAR_GUARDS) {
+function detectDarkInnerCollarFromRgb(rgb, dimensions, guards = SCENE1_STAGE_A_DARK_INNER_COLLAR_GUARDS) {
   for (const guard of guards) {
     const region = normalizeGuardRegion(guard, dimensions);
     let darkPixels = 0;

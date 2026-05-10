@@ -6,6 +6,13 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { createTask, getTask, enqueueTask, STATUS } = require('../taskQueue');
+const {
+  isEnabled: taskDiagnosticsEnabled,
+  patchTaskDiagnostics,
+  readTaskDiagnostics,
+  summarizeUserImageInput,
+  summarizeUserImageInputs,
+} = require('../taskDiagnostics');
 const { normalizePlayerId, normalizeSceneId } = require('../assetStore');
 
 // ─── scene-configs：经过测试调优的完整场景配置 ───
@@ -97,6 +104,11 @@ function isSupportedUserImageInput(value) {
     && (value.startsWith('data:image/') || isValidHttpUrl(value));
 }
 
+async function captureSubmissionDiagnostics(taskId, payload) {
+  if (!taskDiagnosticsEnabled()) return;
+  await patchTaskDiagnostics(taskId, payload);
+}
+
 function requireApiKey(req, res, next) {
   if (!SERVER_API_KEY) {
     return next();
@@ -175,7 +187,8 @@ router.post(
         player_images, pose_image, mask_image, base_image,
       } = req.body;
       const normalizedSceneId = normalizeSceneId(scene_id);
-      const resolvedGender = gender || 'male';
+      const requestedGender = gender || null;
+      const resolvedGender = requestedGender || 'male';
       const resolvedCallbackUrl = callback_url || DEFAULT_CALLBACK_URL || null;
 
       // user_images 为主参数，仅接受 Base64（服务器 DNS 可能无法解析外部 URL）
@@ -221,7 +234,7 @@ router.post(
           scene_id: normalizedSceneId,
           user_image: resolvedUserImages[0],
           user_images: resolvedUserImages,
-          gender: resolvedGender,
+          gender: requestedGender,
           callback_url: resolvedCallbackUrl,
           scene1_v3_pipeline: SCENE1_V3_PIPELINE,
         };
@@ -238,7 +251,7 @@ router.post(
           template_image: defaultGenderConfig.template_image,
           user_images: resolvedUserImages,
           target_person: defaultGenderConfig.target_person,
-          gender: resolvedGender,
+          gender: requestedGender,
           callback_url: resolvedCallbackUrl,
           // 透传完整 scene-config 给 Worker
           faceswap_config: defaultGenderConfig.scene_config || null,
@@ -276,6 +289,41 @@ router.post(
       }
 
       const { task_id } = await createTask(taskParams);
+      await captureSubmissionDiagnostics(task_id, {
+        task_id,
+        diagnostics_version: 1,
+        created_at: new Date().toISOString(),
+        request: {
+          route: '/api/v1/synthesis/submit',
+          scene_id: scene_id,
+          normalized_scene_id: normalizedSceneId,
+          scene_num: sceneNum,
+          requested_gender: requestedGender,
+          route_default_gender: resolvedGender,
+          user_mode: user_mode || null,
+          callback_url: resolvedCallbackUrl,
+          star_ids: Array.isArray(star_ids) ? star_ids : [],
+          normalized_star_ids: Array.isArray(star_ids) ? taskParams.star_ids || [] : [],
+          user_image: summarizeUserImageInput(user_image),
+          user_images: summarizeUserImageInputs(resolvedUserImages),
+        },
+        route_resolution: {
+          mode: taskParams.mode,
+          faceswap_scene: taskParams.faceswap_scene || null,
+          target_person: taskParams.target_person || null,
+          template_image: taskParams.template_image || null,
+          default_scene_config_label: taskParams.faceswap_config?.label || null,
+          default_scene_config_mode: taskParams.faceswap_config?.mode || null,
+        },
+        runtime: {
+          node_env: process.env.NODE_ENV || null,
+          seedream_mode: process.env.SEEDREAM_MODE || 'relay',
+          seedream_model: process.env.SEEDREAM_MODEL || null,
+          seedream_native_model: process.env.SEEDREAM_NATIVE_MODEL || null,
+          vision_model: process.env.VISION_MODEL || null,
+          template_base_url: TEMPLATE_BASE_URL,
+        },
+      });
 
       await enqueueTask(task_id);
 
@@ -326,7 +374,8 @@ router.post(
       const { user_image, user_images, star_ids, user_mode, gender, callback_url } = req.body;
       const resolvedStarIds   = star_ids || DEFAULT_SCENE1_STAR_IDS;
       const resolvedUserMode  = user_mode || DEFAULT_USER_MODE;
-      const resolvedGender    = gender || 'male';
+      const requestedGender   = gender || null;
+      const resolvedGender    = requestedGender || 'male';
       const resolvedCallback  = callback_url || DEFAULT_CALLBACK_URL || null;
 
       if (!isSupportedUserImageInput(user_image)) {
@@ -353,7 +402,7 @@ router.post(
           scene_id: normalizedSceneId,
           user_image,
           user_images: resolvedUserImages,
-          gender: resolvedGender,
+          gender: requestedGender,
           callback_url: resolvedCallback,
           scene1_v3_pipeline: SCENE1_V3_PIPELINE,
         };
@@ -369,7 +418,7 @@ router.post(
           template_image: defaultGenderConfig1.template_image,
           user_images: resolvedUserImages,
           target_person: defaultGenderConfig1.target_person,
-          gender: resolvedGender,
+          gender: requestedGender,
           callback_url: resolvedCallback,
           // 透传完整 scene-config 给 Worker
           faceswap_config: defaultGenderConfig1.scene_config || null,
@@ -389,6 +438,41 @@ router.post(
       }
 
       const { task_id } = await createTask(taskParams);
+      await captureSubmissionDiagnostics(task_id, {
+        task_id,
+        diagnostics_version: 1,
+        created_at: new Date().toISOString(),
+        request: {
+          route: '/api/v1/synthesis/scene1/submit',
+          scene_id: SCENE1_ID,
+          normalized_scene_id: normalizedSceneId,
+          scene_num: sceneNum,
+          requested_gender: requestedGender,
+          route_default_gender: resolvedGender,
+          user_mode: resolvedUserMode,
+          callback_url: resolvedCallback,
+          star_ids: resolvedStarIds,
+          normalized_star_ids: normalizedStarIds,
+          user_image: summarizeUserImageInput(user_image),
+          user_images: summarizeUserImageInputs(resolvedUserImages),
+        },
+        route_resolution: {
+          mode: taskParams.mode,
+          faceswap_scene: taskParams.faceswap_scene || null,
+          target_person: taskParams.target_person || null,
+          template_image: taskParams.template_image || null,
+          default_scene_config_label: taskParams.faceswap_config?.label || null,
+          default_scene_config_mode: taskParams.faceswap_config?.mode || null,
+        },
+        runtime: {
+          node_env: process.env.NODE_ENV || null,
+          seedream_mode: process.env.SEEDREAM_MODE || 'relay',
+          seedream_model: process.env.SEEDREAM_MODEL || null,
+          seedream_native_model: process.env.SEEDREAM_NATIVE_MODEL || null,
+          vision_model: process.env.VISION_MODEL || null,
+          template_base_url: TEMPLATE_BASE_URL,
+        },
+      });
       await enqueueTask(task_id);
 
       res.json({ code: 0, message: 'success', data: { task_id, status: STATUS.PROCESSING } });
@@ -463,6 +547,33 @@ router.post(
         enable_region_sync: enable_region_sync === true ? true : undefined,
         region_sync_key:    region_sync_key || undefined,
       });
+      await captureSubmissionDiagnostics(task_id, {
+        task_id,
+        diagnostics_version: 1,
+        created_at: new Date().toISOString(),
+        request: {
+          route: '/api/v1/synthesis/submit-faceswap',
+          template_image,
+          user_images: summarizeUserImageInputs(user_images),
+          callback_url: resolvedCallbackUrl,
+          size: size || null,
+          enable_region_sync: enable_region_sync === true,
+          region_sync_key: region_sync_key || null,
+        },
+        route_resolution: {
+          mode: 'faceswap',
+          template_image,
+          target_person: null,
+        },
+        runtime: {
+          node_env: process.env.NODE_ENV || null,
+          seedream_mode: process.env.SEEDREAM_MODE || 'relay',
+          seedream_model: process.env.SEEDREAM_MODEL || null,
+          seedream_native_model: process.env.SEEDREAM_NATIVE_MODEL || null,
+          vision_model: process.env.VISION_MODEL || null,
+          template_base_url: TEMPLATE_BASE_URL,
+        },
+      });
 
       await enqueueTask(task_id);
 
@@ -506,6 +617,31 @@ router.get('/query/:taskId', requireApiKey, async (req, res) => {
     res.status(500).json({
       code: 500,
       message: '任务查询失败，请稍后重试',
+      data: null,
+    });
+  }
+});
+
+router.get('/diagnostics/:taskId', requireApiKey, async (req, res) => {
+  try {
+    const diagnostics = await readTaskDiagnostics(req.params.taskId);
+    if (!diagnostics) {
+      return res.status(404).json({
+        code: 404,
+        message: 'diagnostics not found',
+        data: null,
+      });
+    }
+    res.json({
+      code: 0,
+      message: 'success',
+      data: diagnostics,
+    });
+  } catch (err) {
+    console.error('[Route] diagnostics query failed:', err.message);
+    res.status(500).json({
+      code: 500,
+      message: 'diagnostics query failed',
       data: null,
     });
   }
