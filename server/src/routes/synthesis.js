@@ -8,12 +8,15 @@ const { body, validationResult } = require('express-validator');
 const { createTask, getTask, enqueueTask, STATUS } = require('../taskQueue');
 const {
   isEnabled: taskDiagnosticsEnabled,
+  buildTaskArtifactsDir,
+  listTaskArtifacts,
   patchTaskDiagnostics,
   readTaskDiagnostics,
   summarizeUserImageInput,
   summarizeUserImageInputs,
 } = require('../taskDiagnostics');
 const { normalizePlayerId, normalizeSceneId } = require('../assetStore');
+const path = require('path');
 
 // ─── scene-configs：经过测试调优的完整场景配置 ───
 const { SCENE_CONFIGS, SCENE1_V3_PIPELINE } = require('../../../scene-configs');
@@ -642,6 +645,57 @@ router.get('/diagnostics/:taskId', requireApiKey, async (req, res) => {
     res.status(500).json({
       code: 500,
       message: 'diagnostics query failed',
+      data: null,
+    });
+  }
+});
+
+router.get('/diagnostics/:taskId/artifacts', requireApiKey, async (req, res) => {
+  try {
+    const artifacts = await listTaskArtifacts(req.params.taskId);
+    res.json({
+      code: 0,
+      message: 'success',
+      data: artifacts.map(item => ({
+        name: item.name,
+        download_path: `/api/v1/synthesis/diagnostics/${req.params.taskId}/artifacts/${encodeURIComponent(item.name)}`,
+      })),
+    });
+  } catch (err) {
+    console.error('[Route] diagnostics artifacts query failed:', err.message);
+    res.status(500).json({
+      code: 500,
+      message: 'diagnostics artifacts query failed',
+      data: null,
+    });
+  }
+});
+
+router.get('/diagnostics/:taskId/artifacts/:artifactName', requireApiKey, async (req, res) => {
+  try {
+    const safeName = path.basename(req.params.artifactName);
+    const filePath = path.join(buildTaskArtifactsDir(req.params.taskId), safeName);
+    return res.sendFile(filePath, err => {
+      if (!err) return;
+      if (err.code === 'ENOENT') {
+        return res.status(404).json({
+          code: 404,
+          message: 'artifact not found',
+          data: null,
+        });
+      }
+      console.error('[Route] diagnostics artifact download failed:', err.message);
+      return res.status(500).json({
+        code: 500,
+        message: 'diagnostics artifact download failed',
+        data: null,
+      });
+    });
+  } catch (err) {
+    console.error('[Route] diagnostics artifact route failed:', err.message);
+    res.status(500).json({
+      code: 500,
+      message: 'diagnostics artifact route failed',
       data: null,
     });
   }

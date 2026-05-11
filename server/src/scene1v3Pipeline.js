@@ -26,10 +26,21 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_REVIEW_ATTEMPTS = 3;
 const DEFAULT_STAGE_ATTEMPTS = 5;
 const DEFAULT_VISION_MODEL = 'doubao-seed-2-0-pro';
+const USER_FOCUS_SIZE = 1024;
+
+const USER_FACE_BOUNDS_PROMPT = `Look at the user portrait.
+Return ONLY valid JSON with the bounding box of the full identity-bearing head region, including the full hair silhouette, forehead, ears when visible, cheeks, jawline, chin, moustache/beard when present, and a small amount of upper neck.
+Use this exact schema:
+{"x":number,"y":number,"w":number,"h":number}
+All values must be percentages from 0 to 100 relative to the original image size.
+x and y are the top-left corner.
+The box must be tight enough that the face occupies a large part of the crop, but loose enough that no top hair, jawline, or facial hair is cut off.
+Do not include torso, clothing, or large background areas.
+Return JSON only.`;
 
 const SCENE1_STAGE_A_MASK_REGIONS = {
   male: [{ id: 'head_hair_neck', x: 0.52, y: 0.29, width: 0.17, height: 0.23, shape: 'ellipse', feather: 18 }],
-  female: [{ id: 'head_hair_neck', x: 0.49, y: 0.25, width: 0.22, height: 0.28, shape: 'ellipse', feather: 18 }],
+  female: [{ id: 'head_hair_neck', x: 0.510, y: 0.266, width: 0.18, height: 0.235, shape: 'ellipse', feather: 17 }],
 };
 
 const MODELS = {
@@ -100,22 +111,25 @@ Evaluate each result on ALL of these fields:
    FAIL framing_matches_base if ANY of (a), (b), or (c) is false.
 10. hairstyle_ok (bool): Compare hairstyle direction (up/down), approximate length, and overall style against Image 4. FAIL if: (a) Image 4 has short hair in a bun but result has long flowing hair; (b) the hairstyle is a completely different style/direction. Do NOT fail for minor natural adaptation differences.
 11. head_pose_matches_base (bool): The face/head is front-facing and aligned like the mannequin in Image 3. HARD FAIL if the nose-mouth-chin axis is not centered on the body, the head is side-facing, profile, noticeably three-quarter, rotated, tilted, or cannot be pasted onto the front-facing body naturally.
-12. score (1-10): Overall quality. Deduct 3+ for wrong framing/scale/tilt. Deduct 3+ for side-facing/rotated head. Deduct 3+ for halo/color patch. Deduct 3+ for pasted/floating head or neck seam. Deduct 3+ for collar mismatch, black/dark inner collar, dark undershirt collar transfer, or altered white collar. Deduct 2+ for background jerseys. Deduct 2+ for big head. Deduct 2+ for accessories. Deduct 2+ for completely wrong hairstyle.
+12. identity_similarity (bool): The generated face should be recognizably the SAME PERSON as Image 4, not merely a plausible similar person. FAIL if the result looks like a different person with reassembled features.
+13. facial_feature_consistency (bool): Eyes, brows, nose shape/width, mouth shape, lip thickness, philtrum, face width, cheek fullness, and jawline must remain consistent with Image 4. FAIL if multiple core features are shifted, narrowed, widened, or genericized.
+14. facial_hair_consistency (bool): Moustache, beard, stubble, sideburns, or clean-shaven state must match Image 4. FAIL if facial hair is invented, removed, or changed significantly.
+15. score (1-10): Overall quality. Deduct 3+ for wrong framing/scale/tilt. Deduct 3+ for side-facing/rotated head. Deduct 3+ for halo/color patch. Deduct 3+ for pasted/floating head or neck seam. Deduct 3+ for collar mismatch, black/dark inner collar, dark undershirt collar transfer, or altered white collar. Deduct 3+ for wrong identity or reassembled facial features. Deduct 2+ for background jerseys. Deduct 2+ for big head. Deduct 2+ for accessories. Deduct 2+ for completely wrong hairstyle.
 
-PASS condition: face_replaced=true AND body_scale_matches_base=true AND jersey_collar_unchanged=true AND background_jerseys_unchanged=true AND accessories_absent=true AND no_big_head=true AND no_halo_or_color_patch=true AND neck_integrated=true AND framing_matches_base=true AND hairstyle_ok=true AND head_pose_matches_base=true AND score >= 8
+PASS condition: face_replaced=true AND body_scale_matches_base=true AND jersey_collar_unchanged=true AND background_jerseys_unchanged=true AND accessories_absent=true AND no_big_head=true AND no_halo_or_color_patch=true AND neck_integrated=true AND framing_matches_base=true AND hairstyle_ok=true AND head_pose_matches_base=true AND identity_similarity=true AND facial_feature_consistency=true AND facial_hair_consistency=true AND score >= 8
 Score 7 is NOT pass for this workflow. It may look acceptable as a standalone image, but it is not reliable enough as a final compositing source.
 The returned winner is the Stage A image the pipeline should directly paste with Image 3's fixed target region. If winner="neither", the pipeline uses a fallback best-score candidate.
 
 WINNER selection rules (STRICTLY follow in order):
 1. If only one passes - winner is that model.
 2. If both pass - compare scores. If scores differ by 2+, pick the higher. If equal or differ by 1, pick "5_0".
-3. If neither passes due to CRITICAL failures (face_replaced=false, framing_matches_base=false, body_scale_matches_base=false, no_big_head=false, no_halo_or_color_patch=false, neck_integrated=false, head_pose_matches_base=false, jersey_collar_unchanged=false, black/dark inner collar visible, background_jerseys_unchanged=false, accessories_absent=false, or hairstyle_ok=false) - winner is "neither".
+3. If neither passes due to CRITICAL failures (face_replaced=false, framing_matches_base=false, body_scale_matches_base=false, no_big_head=false, no_halo_or_color_patch=false, neck_integrated=false, head_pose_matches_base=false, jersey_collar_unchanged=false, black/dark inner collar visible, background_jerseys_unchanged=false, accessories_absent=false, hairstyle_ok=false, identity_similarity=false, facial_feature_consistency=false, or facial_hair_consistency=false) - winner is "neither".
 4. If neither passes only because both scores are 7 with every bool true - winner is "neither".
 
 Return JSON ONLY - no markdown, no preamble:
 {
-  "result_4_5": {"face_replaced": bool, "body_scale_matches_base": bool, "jersey_collar_unchanged": bool, "background_jerseys_unchanged": bool, "accessories_absent": bool, "no_big_head": bool, "no_halo_or_color_patch": bool, "neck_integrated": bool, "framing_matches_base": bool, "hairstyle_ok": bool, "head_pose_matches_base": bool, "score": number, "issues": []},
-  "result_5_0": {"face_replaced": bool, "body_scale_matches_base": bool, "jersey_collar_unchanged": bool, "background_jerseys_unchanged": bool, "accessories_absent": bool, "no_big_head": bool, "no_halo_or_color_patch": bool, "neck_integrated": bool, "framing_matches_base": bool, "hairstyle_ok": bool, "head_pose_matches_base": bool, "score": number, "issues": []},
+  "result_4_5": {"face_replaced": bool, "body_scale_matches_base": bool, "jersey_collar_unchanged": bool, "background_jerseys_unchanged": bool, "accessories_absent": bool, "no_big_head": bool, "no_halo_or_color_patch": bool, "neck_integrated": bool, "framing_matches_base": bool, "hairstyle_ok": bool, "head_pose_matches_base": bool, "identity_similarity": bool, "facial_feature_consistency": bool, "facial_hair_consistency": bool, "score": number, "issues": []},
+  "result_5_0": {"face_replaced": bool, "body_scale_matches_base": bool, "jersey_collar_unchanged": bool, "background_jerseys_unchanged": bool, "accessories_absent": bool, "no_big_head": bool, "no_halo_or_color_patch": bool, "neck_integrated": bool, "framing_matches_base": bool, "hairstyle_ok": bool, "head_pose_matches_base": bool, "identity_similarity": bool, "facial_feature_consistency": bool, "facial_hair_consistency": bool, "score": number, "issues": []},
   "winner": "4_5" | "5_0" | "neither",
   "reason": "one sentence"
 }`;
@@ -135,9 +149,14 @@ async function runScene1V3Pipeline({ taskId, userImages = [], genderHint = null 
   const maskDir = path.join(taskDir, '00_masks');
   await Promise.all([inputDir, stageADir, reviewDir, finalDir, maskDir].map((dir) => fsp.mkdir(dir, { recursive: true })));
 
-  const userImagePath = path.join(inputDir, 'user.jpg');
+  const userImagePath = path.join(inputDir, 'user_original.jpg');
+  const userFocusedImagePath = path.join(inputDir, 'user_focus.jpg');
   const userInput = userImages[0];
   await materializeImageInput(userInput, userImagePath);
+  const userFocusMeta = await buildFocusedUserPortrait({
+    sourceImage: userImagePath,
+    outputImage: userFocusedImagePath,
+  });
 
   let traits;
   try {
@@ -180,7 +199,7 @@ async function runScene1V3Pipeline({ taskId, userImages = [], genderHint = null 
       model,
       prompts,
       baseImage: baseImagePath,
-      userImage: userImagePath,
+      userImage: userFocusedImagePath,
       maskImage: maskImagePath,
       outputPath,
       responsePath,
@@ -229,6 +248,7 @@ async function runScene1V3Pipeline({ taskId, userImages = [], genderHint = null 
       task_id: taskId,
       scene_id: sceneId,
       traits,
+      user_focus: userFocusMeta,
       selected_model: selected.modelId,
       selection_mode: selected.selectionMode,
       fallback_best_score: selected.fallback === true,
@@ -284,6 +304,95 @@ async function materializeImageInput(input, outputPath) {
     return;
   }
   throw new Error('User image must be a data URL or http/https URL');
+}
+
+async function buildFocusedUserPortrait({ sourceImage, outputImage }) {
+  try {
+    const dimensions = await getImageDimensions(sourceImage);
+    const bounds = await detectUserFaceBounds(sourceImage, dimensions);
+    if (!bounds) {
+      await fsp.copyFile(sourceImage, outputImage);
+      return { used_focus: false, reason: 'no_face_bounds' };
+    }
+    const crop = expandUserPortraitCrop(bounds, dimensions);
+    await cropAndSquareUserPortrait({ sourceImage, outputImage, crop });
+    return {
+      used_focus: true,
+      bounds,
+      crop,
+      output_image: outputImage,
+      output_size: USER_FOCUS_SIZE,
+    };
+  } catch (error) {
+    await fsp.copyFile(sourceImage, outputImage);
+    return { used_focus: false, reason: redactSecrets(error.message) };
+  }
+}
+
+async function detectUserFaceBounds(imagePath, dimensions) {
+  const raw = await callVisionJson({
+    prompt: USER_FACE_BOUNDS_PROMPT,
+    images: [imagePath],
+  });
+  return normalizeUserFaceBounds(raw, dimensions);
+}
+
+function normalizeUserFaceBounds(raw, dimensions) {
+  if (!raw || typeof raw !== 'object') return null;
+  let x = Number(raw.x);
+  let y = Number(raw.y);
+  let w = Number(raw.w);
+  let h = Number(raw.h);
+  if (![x, y, w, h].every(Number.isFinite)) return null;
+  if (x > 100 || y > 100 || w > 100 || h > 100) {
+    x = (x / dimensions.width) * 100;
+    y = (y / dimensions.height) * 100;
+    w = (w / dimensions.width) * 100;
+    h = (h / dimensions.height) * 100;
+  }
+  x = clamp(x, 0, 95);
+  y = clamp(y, 0, 95);
+  w = clamp(w, 5, 95);
+  h = clamp(h, 5, 95);
+  if (x + w > 100) w = Math.max(5, 100 - x);
+  if (y + h > 100) h = Math.max(5, 100 - y);
+  if (w > 85 || h > 85) return null;
+  return { x, y, w, h };
+}
+
+function expandUserPortraitCrop(bounds, dimensions) {
+  const xPx = dimensions.width * (bounds.x / 100);
+  const yPx = dimensions.height * (bounds.y / 100);
+  const wPx = dimensions.width * (bounds.w / 100);
+  const hPx = dimensions.height * (bounds.h / 100);
+  const sidePad = wPx * 0.42;
+  const topPad = hPx * 0.42;
+  const bottomPad = hPx * 0.34;
+  const left = clamp(Math.round(xPx - sidePad), 0, dimensions.width - 1);
+  const top = clamp(Math.round(yPx - topPad), 0, dimensions.height - 1);
+  const right = clamp(Math.round(xPx + wPx + sidePad), left + 1, dimensions.width);
+  const bottom = clamp(Math.round(yPx + hPx + bottomPad), top + 1, dimensions.height);
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+async function cropAndSquareUserPortrait({ sourceImage, outputImage, crop }) {
+  await execFileAsync('ffmpeg', [
+    '-y',
+    '-v', 'error',
+    '-i', sourceImage,
+    '-vf',
+    `crop=${crop.width}:${crop.height}:${crop.x}:${crop.y},` +
+    `scale=${USER_FOCUS_SIZE}:${USER_FOCUS_SIZE}:force_original_aspect_ratio=decrease,` +
+    `pad=${USER_FOCUS_SIZE}:${USER_FOCUS_SIZE}:(ow-iw)/2:(oh-ih)/2:white`,
+    '-frames:v', '1',
+    '-q:v', '2',
+    outputImage,
+  ]);
 }
 
 async function requestAndSaveStageA({ model, prompts, baseImage, userImage, maskImage, outputPath, responsePath, label }) {
@@ -364,6 +473,9 @@ function strictFallbackReview(score) {
     framing_matches_base: true,
     hairstyle_ok: true,
     head_pose_matches_base: false,
+    identity_similarity: false,
+    facial_feature_consistency: false,
+    facial_hair_consistency: false,
     score,
     issues: ['Stage A review unavailable; strict fallback rejects both models'],
   };
@@ -438,6 +550,9 @@ function passesStageVisualQuality(result) {
     && result.hairstyle_ok === true
     && result.framing_matches_base === true
     && result.head_pose_matches_base === true
+    && result.identity_similarity === true
+    && result.facial_feature_consistency === true
+    && result.facial_hair_consistency === true
     && (result.score ?? 0) >= 8;
 }
 
@@ -664,7 +779,7 @@ function customizeStageForUser(stage, user, traits, stageName) {
       : 'Eyewear constraint: Follow Image 2 exactly for whether the person wears glasses.';
 
   const headScaleAnchor = isLockerRoomScene(stage.prompt)
-    ? 'HEAD SCALE LOCK: the generated head must exactly match the compact blank-mannequin head size visible in Image 1. Use the jersey collar width and shoulder span in Image 1 as hard upper limits for head width. Do not make the head larger than the original blank mannequin head in any dimension. If the face feels too small, that is correct - the camera distance in Image 1 makes heads appear small relative to full-body scale.'
+    ? 'HEAD SCALE LOCK: the generated head must exactly match the compact blank-mannequin head size visible in Image 1. Use the jersey collar width and shoulder span in Image 1 as hard upper limits for head width. Do not make the head larger than the original blank mannequin head in any dimension. Prefer a slightly smaller head over a larger head. If the face feels too small, that is correct - the camera distance in Image 1 makes heads appear small relative to full-body scale. A cute oversized portrait head is always wrong for this scene.'
     : '';
 
   const accessoryBlock = [
@@ -682,6 +797,9 @@ function customizeStageForUser(stage, user, traits, stageName) {
     ? [
         `User-specific identity constraint for ${user.id} during ${resolvedStageName}:`,
         resolvedTraits.note || 'Use Image 2 as the only source of identity traits.',
+        'Identity lock (highest priority): Preserve the same person identity from Image 2. Do not synthesize a generic similar face.',
+        'Facial feature lock: Keep the same eye spacing, eyelid shape, brow shape, nose width and bridge, philtrum length, mouth shape, lip thickness, cheek fullness, face width, jawline, chin shape, and facial-hair pattern from Image 2.',
+        'If any of these identity-bearing features conflict with a generic attractive face prior, always prefer Image 2 over the generic face prior.',
         eyewearInstruction,
         accessoryBlock,
         collarLock,
@@ -694,6 +812,8 @@ function customizeStageForUser(stage, user, traits, stageName) {
     : [
         `User-specific identity constraint for ${user.id} during ${resolvedStageName}:`,
         resolvedTraits.note || 'Use Image 2 as the only source of identity traits.',
+        'Identity lock (highest priority): Preserve the same person identity from Image 2. Do not synthesize a generic similar face.',
+        'Facial feature lock: Keep the same eye spacing, eyelid shape, brow shape, nose width and bridge, philtrum length, mouth shape, lip thickness, cheek fullness, face width, jawline, chin shape, and facial-hair pattern from Image 2.',
         eyewearInstruction,
         accessoryBlock,
         collarLock,
@@ -724,6 +844,7 @@ function customizeStageForUser(stage, user, traits, stageName) {
     'white hanging jersey, changed jersey color on wall, white jersey on locker, altered background jersey',
     'bleached collar, missing white collar, altered jersey collar, changed neckline',
     'disconnected face, floating head detached from neck, pasted face effect, face not integrated with neck, mismatched skin tone between face and neck',
+    'generic face, reassembled facial features, wrong jawline, wrong eye spacing, wrong nose shape, wrong mouth shape, wrong moustache, wrong beard pattern',
   ].filter(Boolean).join(', ');
 
   const negativePrompt = [adaptNegativePromptGender(stage.negativePrompt, gender), negativeAdditions]

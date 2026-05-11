@@ -18,11 +18,22 @@ function buildTaskFile(taskId) {
   return path.join(buildTaskDir(taskId), 'diagnostics.json');
 }
 
+function buildTaskArtifactsDir(taskId) {
+  return path.join(buildTaskDir(taskId), 'artifacts');
+}
+
 async function ensureTaskDir(taskId) {
   if (!isEnabled()) return null;
   const taskDir = buildTaskDir(taskId);
   await fsp.mkdir(taskDir, { recursive: true });
   return taskDir;
+}
+
+async function ensureTaskArtifactsDir(taskId) {
+  if (!isEnabled()) return null;
+  const artifactsDir = buildTaskArtifactsDir(taskId);
+  await fsp.mkdir(artifactsDir, { recursive: true });
+  return artifactsDir;
 }
 
 function hashBuffer(buffer) {
@@ -94,6 +105,23 @@ function sanitizeForJson(value) {
   return value;
 }
 
+function sanitizeArtifactName(fileName) {
+  return String(fileName || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_');
+}
+
+function guessMimeTypeFromFileName(fileName) {
+  const lower = String(fileName || '').toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.txt')) return 'text/plain; charset=utf-8';
+  if (lower.endsWith('.json')) return 'application/json; charset=utf-8';
+  return 'application/octet-stream';
+}
+
 function deepMerge(baseValue, patchValue) {
   if (patchValue === undefined) return baseValue;
   if (Array.isArray(patchValue)) return patchValue.slice();
@@ -142,17 +170,60 @@ async function appendTaskDiagnostics(taskId, key, item) {
   return patchTaskDiagnostics(taskId, { [key]: nextItems });
 }
 
+async function writeTaskArtifact(taskId, fileName, content, options = {}) {
+  if (!isEnabled()) return null;
+  const artifactsDir = await ensureTaskArtifactsDir(taskId);
+  const safeName = sanitizeArtifactName(fileName);
+  const filePath = path.join(artifactsDir, safeName);
+  const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content, options.encoding || 'utf8');
+  await fsp.writeFile(filePath, buffer);
+  const stat = await fsp.stat(filePath);
+  const metadata = sanitizeForJson({
+    name: safeName,
+    relative_path: path.join('artifacts', safeName).replace(/\\/g, '/'),
+    byte_length: stat.size,
+    sha256: hashBuffer(buffer),
+    mime_type: options.mimeType || guessMimeTypeFromFileName(safeName),
+    category: options.category || null,
+    attempt: options.attempt || null,
+    created_at: new Date().toISOString(),
+  });
+  await appendTaskDiagnostics(taskId, 'artifacts', metadata);
+  return metadata;
+}
+
+async function listTaskArtifacts(taskId) {
+  if (!isEnabled()) return [];
+  const artifactsDir = buildTaskArtifactsDir(taskId);
+  try {
+    const entries = await fsp.readdir(artifactsDir, { withFileTypes: true });
+    return entries
+      .filter(entry => entry.isFile())
+      .map(entry => ({
+        name: entry.name,
+        path: path.join(artifactsDir, entry.name),
+      }));
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
 module.exports = {
   DIAGNOSTICS_ROOT,
   appendTaskDiagnostics,
+  buildTaskArtifactsDir,
   buildTaskDir,
   buildTaskFile,
   ensureTaskDir,
+  ensureTaskArtifactsDir,
   hashBuffer,
   isEnabled,
+  listTaskArtifacts,
   patchTaskDiagnostics,
   readTaskDiagnostics,
   summarizeUserImageInput,
   summarizeUserImageInputs,
+  writeTaskArtifact,
   writeTaskDiagnostics,
 };

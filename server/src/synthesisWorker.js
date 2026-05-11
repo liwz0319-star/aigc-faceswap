@@ -33,6 +33,7 @@ const {
   appendTaskDiagnostics,
   summarizeUserImageInput,
   summarizeUserImageInputs,
+  writeTaskArtifact,
 } = require('./taskDiagnostics');
 // Seedream 调用重试配置
 const SEEDREAM_MAX_RETRIES = 2;
@@ -69,6 +70,49 @@ async function appendTaskDiagnosticsSafe(taskId, key, item) {
   }
 }
 
+async function writeTaskArtifactSafe(taskId, fileName, content, options = {}) {
+  if (!taskDiagnosticsEnabled()) return null;
+  try {
+    return await writeTaskArtifact(taskId, fileName, content, options);
+  } catch (error) {
+    console.warn(`[Worker] [diagnostics] artifact write failed for ${taskId}/${fileName}: ${error.message}`);
+    return null;
+  }
+}
+
+async function writeTaskArtifactFromDataUrlSafe(taskId, fileName, dataUrl, options = {}) {
+  if (!taskDiagnosticsEnabled() || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return null;
+  const payload = dataUrl.replace(/^data:[^;]+;base64,/, '');
+  const mimeType = dataUrl.match(/^data:([^;]+);base64,/i)?.[1] || options.mimeType || null;
+  return writeTaskArtifactSafe(taskId, fileName, Buffer.from(payload, 'base64'), { ...options, mimeType });
+}
+
+async function writeTaskArtifactFromRemoteUrlSafe(taskId, fileName, url, options = {}) {
+  if (!taskDiagnosticsEnabled() || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+  try {
+    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000 });
+    return await writeTaskArtifactSafe(taskId, fileName, Buffer.from(response.data), {
+      ...options,
+      mimeType: options.mimeType || response.headers?.['content-type'] || null,
+    });
+  } catch (error) {
+    console.warn(`[Worker] [diagnostics] remote artifact fetch failed for ${taskId}/${fileName}: ${error.message}`);
+    return null;
+  }
+}
+
+async function writeTaskArtifactFromFileUrlSafe(taskId, fileName, fileUrl, options = {}) {
+  if (!taskDiagnosticsEnabled() || typeof fileUrl !== 'string' || !fileUrl.startsWith('file://')) return null;
+  try {
+    const filePath = fileUrl.replace('file://', '');
+    const content = await fsp.readFile(filePath);
+    return await writeTaskArtifactSafe(taskId, fileName, content, options);
+  } catch (error) {
+    console.warn(`[Worker] [diagnostics] file artifact copy failed for ${taskId}/${fileName}: ${error.message}`);
+    return null;
+  }
+}
+
 async function localizeResultImage(remoteUrl, taskId) {
   try {
     await fsp.mkdir(RESULTS_DIR, { recursive: true });
@@ -97,6 +141,53 @@ async function localizeResultImage(remoteUrl, taskId) {
   }
 }
 
+async function validateHeadSwapResultWithReference(resultBase64, sourceReference, sceneLabel, targetPerson = 'the main swapped person', extraRule = '') {
+  const key = process.env.VISION_API_KEY;
+  if (!key) return { ok: true, skipped: true, reason: 'no_vision_key' };
+
+  const url = process.env.VISION_API_URL || 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+  try {
+    const res = await axios.post(url, {
+      model: process.env.VISION_MODEL || 'doubao-1-5-vision-pro-32k-250115',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: resultBase64 } },
+          { type: 'image_url', image_url: { url: sourceReference } },
+          {
+            type: 'text',
+            text:
+              'You are a quality inspector for head-swap composites. Image 1 is the RESULT. Image 2 is the SOURCE PERSON reference. ' +
+              'Validate the result for "' + sceneLabel + '". Focus on ' + targetPerson + '.\n\n' +
+              'Check ALL of the following criteria. Reply PASS only if EVERY criterion is met:\n' +
+              '1. HEAD COMPLETENESS: Exactly one complete human head visible from the top of the hair (crown) to the chin.\n' +
+              '2. PHOTOREALISM: The face looks like a real photograph, not cartoon, anime, CGI, 3D render, or plastic skin.\n' +
+              '3. SKIN CONTINUITY: Face and neck skin tone transitions naturally. No visible color jump.\n' +
+              '4. CLOTHING PRESERVATION: Original scene clothing preserved. No source-photo clothing leaked in.\n' +
+              '5. BACKGROUND PRESERVATION: Scene background intact.\n' +
+              '6. HEAD PROPORTION: Head proportional to body.\n' +
+              '7. SINGLE HEAD: Exactly one face.\n' +
+              '8. IDENTITY MATCH: The swapped person in Image 1 must clearly be the SAME person as Image 2, with matching apparent age group, hairstyle, hairline, and overall facial identity. Reject older, younger, or random different faces.\n\n' +
+              'If ANY criterion fails, reply "FAIL:" followed by a short reason.\n' +
+              'If ALL criteria pass, reply "PASS".\n' +
+              extraRule
+          },
+        ],
+      }],
+      max_tokens: 40,
+      temperature: 0,
+    }, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, timeout: 20000 });
+
+    const answer = (res.data?.choices?.[0]?.message?.content || '').trim().toUpperCase();
+    if (answer.includes('FAIL')) return { ok: false, reason: answer || 'FAIL' };
+    if (answer.includes('PASS')) return { ok: true, reason: answer };
+    return { ok: true, skipped: true, reason: `unparsed:${answer}` };
+  } catch (e) {
+    console.warn(`[Worker] [validator-ref] skip result check: ${e.message}`);
+    return { ok: true, skipped: true, reason: e.message };
+  }
+}
+
 /**
  * 从视觉模型的外貌描述中提取性别
  * @param {string} description - 视觉模型返回的英文描述
@@ -120,6 +211,150 @@ function extractGenderFromDescription(description) {
   if (femaleScore > maleScore) return 'female';
   if (maleScore > 0) return 'male';
   return 'male'; // 默认男性
+}
+
+function containsAny(text, patterns) {
+  return patterns.some(pattern => text.includes(pattern));
+}
+
+function firstMatch(text, patternMap) {
+  for (const [value, patterns] of patternMap) {
+    if (containsAny(text, patterns)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function matchesAnyRegex(text, patterns) {
+  return patterns.some(pattern => pattern.test(text));
+}
+
+function detectGlassesState(text) {
+  if (!text) return null;
+
+  const negativePatterns = [
+    /\bno glasses\b/,
+    /\bwithout glasses\b/,
+    /\bnot wearing glasses\b/,
+    /\bwithout any visible[^.]*\bglasses\b/,
+    /\bwithout any[^.]*\bglasses\b/,
+    /\bno eyewear\b/,
+    /\bwithout eyewear\b/,
+    /\bnot wearing eyewear\b/,
+  ];
+
+  if (matchesAnyRegex(text, negativePatterns)) {
+    return 'no_glasses';
+  }
+
+  const positivePatterns = [
+    /\bwearing glasses\b/,
+    /\bwith glasses\b/,
+    /\bglasses are visible\b/,
+    /\beyewear is visible\b/,
+    /\bsunglasses\b/,
+    /\beyeglasses\b/,
+  ];
+
+  if (matchesAnyRegex(text, positivePatterns)) {
+    return 'wearing_glasses';
+  }
+
+  return null;
+}
+
+function buildCanonicalAppearanceDescription(description, gender = 'unknown') {
+  if (!description || typeof description !== 'string') {
+    return '';
+  }
+
+  const text = description.toLowerCase();
+  const normalizedGender = gender === 'female' ? 'female' : gender === 'male' ? 'male' : 'person';
+  const parts = [`The person is ${normalizedGender}.`];
+
+  const skinTone = firstMatch(text, [
+    ['fair skin', ['fair skin', 'skin tone is fair', 'light skin']],
+    ['medium skin', ['medium skin', 'olive skin']],
+    ['tan skin', ['tan skin']],
+    ['dark skin', ['dark skin', 'deep skin']],
+  ]);
+
+  const apparentAge = firstMatch(text, [
+    ['young adult', ['young adult', 'youthful adult', 'late teens', 'early twenties', 'in their early twenties', 'appears young']],
+    ['adult', ['adult', 'in their twenties', 'in his twenties', 'in her twenties', 'in their thirties', 'in his thirties', 'in her thirties']],
+    ['middle-aged', ['middle-aged', 'in their forties', 'in his forties', 'in her forties', 'in their fifties', 'in his fifties', 'in her fifties']],
+    ['older adult', ['older adult', 'elderly', 'senior']],
+  ]);
+
+  const hairColor = firstMatch(text, [
+    ['black hair', ['black hair']],
+    ['dark brown hair', ['dark brown hair']],
+    ['brown hair', ['brown hair']],
+    ['dark hair', ['dark hair']],
+    ['blonde hair', ['blonde hair']],
+  ]);
+
+  const hairLength = firstMatch(text, [
+    ['very short hair', ['buzz cut', 'crew cut', 'fade', 'close-cropped', 'cropped very short']],
+    ['short hair', ['short hair']],
+    ['medium-length hair', ['medium-length hair', 'medium length hair']],
+    ['long hair', ['long hair']],
+  ]);
+
+  const hairStyle = firstMatch(text, [
+    ['a high messy bun', ['high messy bun', 'high, messy bun', 'high, somewhat messy bun']],
+    ['a high bun', ['high bun', 'sleek, high bun']],
+    ['a ponytail', ['ponytail']],
+    ['hair worn down', ['hair worn down', 'worn down']],
+  ]);
+
+  const hairTexture = firstMatch(text, [
+    ['straight hair', ['straight hair']],
+    ['wavy hair', ['wavy hair']],
+    ['curly hair', ['curly hair']],
+  ]);
+
+  const hairline = firstMatch(text, [
+    ['a full hairline', ['full hairline']],
+    ['a slightly receding hairline', ['slightly receding hairline', 'mildly receding hairline']],
+    ['a receding hairline', ['receding hairline']],
+    ['a high forehead', ['high forehead']],
+  ]);
+
+  const forehead = containsAny(text, ['exposed forehead', 'no bangs'])
+    ? 'with an exposed forehead and no bangs'
+    : containsAny(text, ['soft fringe', 'natural soft fringe', 'bangs'])
+    ? 'with visible bangs from the source photo'
+    : null;
+
+  const glassesState = detectGlassesState(text);
+  const glasses = glassesState === 'wearing_glasses' ? 'wearing glasses' : null;
+
+  const hairTerms = [hairColor, hairLength, hairTexture, hairStyle].filter(Boolean);
+  if (hairTerms.length > 0) {
+    parts.push(`Hair: ${hairTerms.join(', ')}${forehead ? `, ${forehead}` : ''}.`);
+  } else if (forehead) {
+    parts.push(`Forehead and fringe: ${forehead}.`);
+  }
+
+  if (skinTone) {
+    parts.push(`Skin tone: ${skinTone}.`);
+  }
+
+  if (apparentAge) {
+    parts.push(`Apparent age: ${apparentAge}.`);
+  }
+
+  if (hairline) {
+    parts.push(`Hairline: ${hairline}.`);
+  }
+
+  if (glasses) {
+    parts.push(`Accessory: ${glasses}.`);
+  }
+
+  return parts.join(' ');
 }
 
 /**
@@ -267,6 +502,41 @@ function clampNormalizedReferenceCrop(crop, conf) {
     offsetX: width < 0.999 ? clamp(left / (1 - width), 0, 1) : 0.5,
     offsetY: height < 0.999 ? clamp(top / (1 - height), 0, 1) : 0.5,
     anchor: crop.anchor,
+  };
+}
+
+function cropToNormalizedRect(crop) {
+  if (!crop) return null;
+  const width = clamp(crop.width ?? 1, 0.1, 1);
+  const height = clamp(crop.height ?? 1, 0.1, 1);
+  const baseOffsetX = typeof crop.offsetX === 'number' ? crop.offsetX : 0.5;
+  const baseOffsetY = typeof crop.offsetY === 'number'
+    ? crop.offsetY : crop.anchor === 'north' ? 0 : 0.5;
+  const left = clamp((1 - width) * baseOffsetX, 0, Math.max(0, 1 - width));
+  const top = clamp((1 - height) * baseOffsetY, 0, Math.max(0, 1 - height));
+  return {
+    width,
+    height,
+    left,
+    top,
+    centerX: left + width / 2,
+    centerY: top + height / 2,
+  };
+}
+
+function mergeReferenceCropWithDetectedCenter(baseCrop, detectedCrop) {
+  const baseRect = cropToNormalizedRect(baseCrop);
+  const detectedRect = cropToNormalizedRect(detectedCrop);
+  if (!baseRect || !detectedRect) {
+    return baseCrop || detectedCrop || null;
+  }
+  const left = clamp(detectedRect.centerX - baseRect.width / 2, 0, Math.max(0, 1 - baseRect.width));
+  const top = clamp(detectedRect.centerY - baseRect.height / 2, 0, Math.max(0, 1 - baseRect.height));
+  return {
+    width: baseRect.width,
+    height: baseRect.height,
+    offsetX: baseRect.width < 0.999 ? clamp(left / (1 - baseRect.width), 0, 1) : 0.5,
+    offsetY: baseRect.height < 0.999 ? clamp(top / (1 - baseRect.height), 0, 1) : 0.5,
   };
 }
 
@@ -455,16 +725,35 @@ async function preprocessReferenceImage(userImageBase64, conf) {
   let faceDetected = false;
   let faceBounds = null;
   let faceDetectionValid = false;
+  let faceDetectionStrategy = 'none';
   if (conf.refNormalize) {
     const face = await detectFaceBounds(userImageBase64);
     faceBounds = face || null;
     if (face) {
       console.log(`[Worker] [refPreprocess] 脸部检测原始值: x=${face.x}% y=${face.y}% w=${face.w}% h=${face.h}%`);
-      // 验证检测结果合理性：脸部不应超过图像的 70%，且不应超出边界
-      const isValid = face.w <= 70 && face.h <= 70 && (face.x + face.w) <= 100 && (face.y + face.h) <= 100;
+      const minFaceWidth = Math.max(5, Number(conf.refNormalizeMinFaceWidth) || 12);
+      const minFaceHeight = Math.max(5, Number(conf.refNormalizeMinFaceHeight) || 12);
+      const minFaceArea = Math.max(100, Number(conf.refNormalizeMinFaceArea) || 240);
+      const maxFaceWidth = Math.min(95, Number(conf.refNormalizeMaxFaceWidth) || 70);
+      const maxFaceHeight = Math.min(95, Number(conf.refNormalizeMaxFaceHeight) || 70);
+      const faceArea = face.w * face.h;
+      const isValid = face.w <= maxFaceWidth
+        && face.h <= maxFaceHeight
+        && face.w >= minFaceWidth
+        && face.h >= minFaceHeight
+        && faceArea >= minFaceArea
+        && (face.x + face.w) <= 100
+        && (face.y + face.h) <= 100;
       faceDetectionValid = isValid;
       if (isValid) {
-        faceCrop = clampNormalizedReferenceCrop(faceBoundsToCrop(face), conf);
+        const detectedCrop = clampNormalizedReferenceCrop(faceBoundsToCrop(face), conf);
+        if (conf.refNormalizeCenterOnly && conf.refCrop) {
+          faceCrop = mergeReferenceCropWithDetectedCenter(conf.refCrop, detectedCrop);
+          faceDetectionStrategy = 'detected_center_only';
+        } else {
+          faceCrop = detectedCrop;
+          faceDetectionStrategy = 'detected_full_crop';
+        }
         faceDetected = true;
         console.log(`[Worker] [refPreprocess] 脸部检测有效，使用标准化裁剪`);
       } else {
@@ -475,6 +764,7 @@ async function preprocessReferenceImage(userImageBase64, conf) {
   // 如果脸部检测失败或不合理，回退到配置的 refCrop
   if (!faceDetected && conf.refCrop) {
     faceCrop = conf.refCrop;
+    faceDetectionStrategy = 'config_refCrop_fallback';
     console.log(`[Worker] [refPreprocess] 使用配置的 refCrop`);
   }
 
@@ -518,6 +808,7 @@ async function preprocessReferenceImage(userImageBase64, conf) {
     attempted: conf.refNormalize === true,
     bounds: faceBounds,
     valid: faceDetectionValid,
+    strategy: faceDetectionStrategy,
     resolved_crop: faceCrop,
   };
   debug.input_meta = {
@@ -635,6 +926,9 @@ function summarizeResolvedMask(inputW, inputH, mask, outputW, outputH) {
         offset_y: mask[`${prefix}NeckOffsetY`] ?? null,
       },
       body_inset_x: mask[`${prefix}BodyInsetX`] ?? null,
+      body_shape: mask[`${prefix}BodyShape`] ?? 'rect',
+      body_top_ratio: mask[`${prefix}BodyTopRatio`] ?? null,
+      body_bottom_inset_x: mask[`${prefix}BodyBottomInsetX`] ?? null,
       no_body_rect: mask[`${prefix}NoBodyRect`] === true,
     };
   };
@@ -646,6 +940,20 @@ function summarizeResolvedMask(inputW, inputH, mask, outputW, outputH) {
     solid_top_h: mask.compSolidTopH ?? null,
   };
   return summary;
+}
+
+function buildTaperBodySvg(left, top, width, height, topInsetX, bottomInsetX) {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const topInset = clamp(topInsetX, 0, Math.floor(safeWidth / 2));
+  const bottomInset = clamp(bottomInsetX, 0, Math.floor(safeWidth / 2));
+  const x1 = left + topInset;
+  const x2 = left + safeWidth - topInset;
+  const x3 = left + safeWidth - bottomInset;
+  const x4 = left + bottomInset;
+  const y1 = top;
+  const y2 = top + safeHeight;
+  return `<polygon points="${x1},${y1} ${x2},${y1} ${x3},${y2} ${x4},${y2}" fill="white"/>`;
 }
 
 /**
@@ -737,11 +1045,19 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
       const sideOffsetX = Math.max(0, Math.round((mask.compSideHairOffsetX ?? 0) * scaleX));
       const sideOffsetY = Math.max(0, Math.round((mask.compSideHairOffsetY ?? 0) * scaleY));
       const bodyInsetX = Math.max(0, Math.round((mask.compBodyInsetX ?? 0) * scaleX));
+      const bodyBottomInsetX = Math.max(bodyInsetX, Math.round((mask.compBodyBottomInsetX ?? (mask.compBodyInsetX ?? 0)) * scaleX));
+      const bodyTopRatio = mask.compBodyTopRatio ?? 0.55;
+      const bodyShape = mask.compBodyShape || 'rect';
       const includeCompBodyRect = mask.compNoBodyRect !== true;
-      const bodyTop = compTop + Math.round(domeH * 0.55);
+      const bodyTop = compTop + Math.round(domeH * bodyTopRatio);
       const bodyH = Math.max(1, compTop + compH - bodyTop);
       const bodyLeft = compLeft + bodyInsetX;
       const bodyW = Math.max(1, compW - bodyInsetX * 2);
+      const bodySvgComp = !includeCompBodyRect
+        ? ''
+        : bodyShape === 'taper'
+          ? buildTaperBodySvg(bodyLeft, bodyTop, bodyW, bodyH, 0, Math.max(0, bodyBottomInsetX - bodyInsetX))
+          : `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>`;
       const topRx = Math.round(compW / 2) + domeExpandX;
       const topCy = compTop + domeH;
       const leftHairCx = compCx - sideOffsetX;
@@ -756,7 +1072,7 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
       }
       svgComp = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${topRx}" ry="${domeH}" fill="white"/>` +
-        (includeCompBodyRect ? `<rect x="${bodyLeft}" y="${bodyTop}" width="${bodyW}" height="${bodyH}" fill="white"/>` : '') +
+        bodySvgComp +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${sideRx}" ry="${sideRy}" fill="white"/>` +
         neckSvgComp,
@@ -768,9 +1084,13 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
         .toBuffer();
       let compBuf = await sharp(compRaw).blur(feather).png().toBuffer();
       // hairDome: add inner solid core to prevent over-feathering
-      const innerBodyTop = compTop + Math.round(domeH * 0.62);
+      const innerBodyTop = compTop + Math.round(domeH * (mask.compInnerBodyTopRatio ?? Math.max(bodyTopRatio + 0.08, 0.62)));
       const bodyInsetBase = Math.max(0, Math.round((mask.compBodyInsetX ?? 0) * scaleX));
       const bodyInset = bodyInsetBase + Math.max(1, Math.round(feather * 0.45));
+      const bodyBottomInset = Math.max(
+        bodyInset,
+        Math.round((mask.compBodyBottomInsetX ?? (mask.compBodyInsetX ?? 0)) * scaleX) + Math.max(1, Math.round(feather * 0.6))
+      );
       const innerBodyH = Math.max(1, compTop + compH - innerBodyTop);
       const innerTopRx = Math.max(1, Math.round(compW / 2) + domeExpandX - Math.round(feather * 0.35));
       // 顶部 dome 不缩减 — 保持完整高度避免头顶头发被羽化虚化
@@ -784,9 +1104,21 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
         const innerNeckCy = compTop + Math.round((mask.compNeckOffsetY ?? compH * 0.8) * scaleY);
         neckSvgSolid = `<ellipse cx="${compCx}" cy="${innerNeckCy}" rx="${innerNeckRx}" ry="${innerNeckRy}" fill="white"/>`;
       }
+      const innerBodySvg = !includeCompBodyRect
+        ? ''
+        : bodyShape === 'taper'
+          ? buildTaperBodySvg(
+              compLeft + bodyInset,
+              innerBodyTop,
+              Math.max(1, compW - bodyInset * 2),
+              innerBodyH,
+              0,
+              Math.max(0, bodyBottomInset - bodyInset)
+            )
+          : `<rect x="${compLeft + bodyInset}" y="${innerBodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>`;
       svgComp = wrapSvgWithBottomClip(outputW, outputH,
         `<ellipse cx="${compCx}" cy="${topCy}" rx="${innerTopRx}" ry="${innerTopRy}" fill="white"/>` +
-        (includeCompBodyRect ? `<rect x="${compLeft + bodyInset}" y="${innerBodyTop}" width="${Math.max(1, compW - bodyInset * 2)}" height="${innerBodyH}" fill="white"/>` : '') +
+        innerBodySvg +
         `<ellipse cx="${leftHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
         `<ellipse cx="${rightHairCx}" cy="${hairCy}" rx="${innerSideRx}" ry="${innerSideRy}" fill="white"/>` +
         neckSvgSolid,
@@ -857,7 +1189,7 @@ async function buildSceneMask(inputW, inputH, mask, outputW, outputH) {
 /**
  * Composite 后处理：用 mask 把 AI 生成图的面部贴到原始底图上
  */
-async function compositeWithMask(templateImageUrl, generatedImageUrl, compBuf, outputW, outputH, taskId) {
+async function compositeWithMask(templateImageUrl, generatedImageUrl, compBuf, outputW, outputH, taskId, attemptIndex = null) {
   const os = require('os');
   const tmpDir = os.tmpdir();
   const tmpTemplate = path.join(tmpDir, `comp_tpl_${taskId}.jpg`);
@@ -893,6 +1225,9 @@ async function compositeWithMask(templateImageUrl, generatedImageUrl, compBuf, o
       .composite([{ input: compBuf, blend: 'dest-in' }])
       .png()
       .toBuffer();
+    if (attemptIndex != null) {
+      await writeTaskArtifactSafe(taskId, `attempt_${attemptIndex}_masked_face.png`, aiFaceMasked, { mimeType: 'image/png' });
+    }
 
     // 2. 原始底图 resize → 叠加 masked face (over) → 锁定背景
     const tplResized = await sharp(tmpTemplate)
@@ -917,7 +1252,7 @@ async function compositeWithMask(templateImageUrl, generatedImageUrl, compBuf, o
 /**
  * 验证换脸结果质量（可选）
  */
-async function validateHeadSwapResult(resultBase64, sceneLabel, targetPerson = 'the main swapped person', extraRule = '') {
+async function validateHeadSwapResult(resultBase64, sceneLabel, targetPerson = 'the main swapped person', extraRule = '', sourceReference = null) {
   const key = process.env.VISION_API_KEY;
   if (!key) return { ok: true, skipped: true, reason: 'no_vision_key' };
 
@@ -1020,6 +1355,7 @@ async function processFaceswapTask(taskId, task) {
   try {
     // ── 步骤1: 视觉模型解析用户外貌（含性别检测）──
     let userDescription = '';
+    let promptUserDescription = '';
     let visionError = null;
     try {
       userDescription = await describeUserAppearance([user_images[0]]);
@@ -1032,6 +1368,7 @@ async function processFaceswapTask(taskId, task) {
     // ── 步骤2: 性别识别 → 选择男/女模板 ──
     // 优先使用 H5 传入的 gender，未传时才用视觉模型推断
     const detectedGender = defaultGender ?? (userDescription ? extractGenderFromDescription(userDescription) : 'male');
+    promptUserDescription = buildCanonicalAppearanceDescription(userDescription, detectedGender);
     let template_image = defaultTemplateImage;
     let target_person = defaultTargetPerson;
     let template_type = 'faceswap';
@@ -1070,6 +1407,7 @@ async function processFaceswapTask(taskId, task) {
       worker: {
         vision: {
           user_description: userDescription || null,
+          prompt_user_description: promptUserDescription || null,
           error: visionError,
         },
         resolution: {
@@ -1102,6 +1440,9 @@ async function processFaceswapTask(taskId, task) {
         const preprocessed = await preprocessReferenceImage(user_images[0], genderSceneConfig);
         processedUserImage = preprocessed.imageDataUrl;
         referencePreprocess = preprocessed.debug;
+        await writeTaskArtifactFromDataUrlSafe(taskId, 'reference_preprocessed.jpg', processedUserImage, {
+          category: 'reference_preprocess',
+        });
         console.log(`[Worker] [faceswap] 参考图预处理完成`);
       } catch (preprocErr) {
         console.error(`[Worker] [faceswap] 参考图预处理失败: ${preprocErr.message}`);
@@ -1115,7 +1456,7 @@ async function processFaceswapTask(taskId, task) {
     // ── 步骤4: 构建增强 Prompt（含 extraPromptLines + extraNegativeTerms）──
     const { prompt: basePrompt, negative_prompt: baseNegPrompt } = buildFaceswapPrompt({
       targetPerson:  target_person || 'the only person in the image',
-      userDescription,
+      userDescription: promptUserDescription || userDescription,
       gender:        detectedGender,
       templateType:  template_type,
     });
@@ -1153,6 +1494,14 @@ async function processFaceswapTask(taskId, task) {
         applied_prompt_lines: mergedPromptLines,
         applied_negative_terms: mergedNegativeTerms,
       },
+    });
+    await writeTaskArtifactSafe(taskId, 'prompt.txt', prompt, {
+      category: 'prompt',
+      mimeType: 'text/plain; charset=utf-8',
+    });
+    await writeTaskArtifactSafe(taskId, 'negative_prompt.txt', negative_prompt, {
+      category: 'prompt',
+      mimeType: 'text/plain; charset=utf-8',
     });
 
     // ── 步骤5: 生成图片 ──
@@ -1192,6 +1541,10 @@ async function processFaceswapTask(taskId, task) {
           throw new Error(`buildSceneMask 返回空 apiBuf，mask 配置无效`);
         }
         apiMaskBase64 = `data:image/png;base64,${apiBuf.toString('base64')}`;
+        await writeTaskArtifactSafe(taskId, 'api_mask.png', apiBuf, {
+          category: 'mask',
+          mimeType: 'image/png',
+        });
         console.log(`[Worker] [faceswap] inpaint mask 已构建 (${apiBuf.length} bytes)`);
 
         // Pre-fill mask: 用肤色填充 mannequin 区域（坐标需缩放到输出尺寸）
@@ -1210,6 +1563,10 @@ async function processFaceswapTask(taskId, task) {
           .jpeg({ quality: 95 })
           .toBuffer();
         preFilledTemplate = `data:image/jpeg;base64,${filledBuf.toString('base64')}`;
+        await writeTaskArtifactSafe(taskId, 'template_prefill.jpg', filledBuf, {
+          category: 'mask',
+          mimeType: 'image/jpeg',
+        });
         console.log(`[Worker] [faceswap] preFill mask 已应用 (${mLeft},${mTop}) ${mw}x${mh}`);
       } catch (maskErr) {
         console.error(`[Worker] [faceswap] inpaint mask 构建失败: ${maskErr.message}`);
@@ -1314,6 +1671,10 @@ async function processFaceswapTask(taskId, task) {
             output_url: imageResult.url,
             urls_count: Array.isArray(imageResult.urls) ? imageResult.urls.length : 0,
           };
+          await writeTaskArtifactFromRemoteUrlSafe(taskId, `attempt_${attemptIndex}_generated.jpg`, imageResult.url, {
+            category: 'attempt_generation',
+            attempt: attemptIndex,
+          });
           console.log(`[Worker] [faceswap] 生成成功 (attempt ${attemptIndex}/${MAX_GENERATE_ATTEMPTS}, ${Date.now() - t0}ms): ${imageResult.url.substring(0, 80)}...`);
 
           // ── 步骤6: 后处理（根据 mode 分支）──
@@ -1346,11 +1707,12 @@ async function processFaceswapTask(taskId, task) {
               await patchTaskDiagnosticsSafe(taskId, { mask: resolvedMaskSummary });
             }
             console.log(`[Worker] [faceswap] composite mask: 底图 ${maskInputW}x${maskInputH} → 输出 ${outW}x${outH}`);
-            const { compBuf } = await buildSceneMask(maskInputW, maskInputH, genderSceneConfig.mask, outW, outH);
-            if (compBuf) {
-              const finalPath = await compositeWithMask(template_image, imageResult.url, compBuf, outW, outH, taskId);
-              finalUrl = `file://${finalPath}`;
-              compositeUsed = true;
+              const { compBuf } = await buildSceneMask(maskInputW, maskInputH, genderSceneConfig.mask, outW, outH);
+              if (compBuf) {
+                await writeTaskArtifactSafe(taskId, 'comp_mask.png', compBuf, { mimeType: 'image/png' });
+                const finalPath = await compositeWithMask(template_image, imageResult.url, compBuf, outW, outH, taskId, attemptIndex);
+                finalUrl = `file://${finalPath}`;
+                compositeUsed = true;
               console.log(`[Worker] [faceswap] ${sceneMode} composite 完成`);
             }
           }
@@ -1359,6 +1721,12 @@ async function processFaceswapTask(taskId, task) {
             skip_composite: genderSceneConfig?.skipComposite === true,
             final_url: finalUrl,
           };
+          if (finalUrl && finalUrl.startsWith('file://')) {
+            await writeTaskArtifactFromFileUrlSafe(taskId, `attempt_${attemptIndex}_composite.jpg`, finalUrl, {
+              category: 'attempt_postprocess',
+              attempt: attemptIndex,
+            });
+          }
 
           // ── 步骤7: 可选验证 ──
           let validationFailed = false;
@@ -1366,12 +1734,22 @@ async function processFaceswapTask(taskId, task) {
             try {
               const finalPath = finalUrl.replace('file://', '');
               const finalBuf = await fsp.readFile(finalPath);
-              const validation = await validateHeadSwapResult(
-                `data:image/jpeg;base64,${finalBuf.toString('base64')}`,
-                genderSceneConfig.label || `Scene ${task.params.faceswap_scene}`,
-                genderSceneConfig.validationTarget || target_person,
-                genderSceneConfig.validationRule || ''
-              );
+              const validationInput = `data:image/jpeg;base64,${finalBuf.toString('base64')}`;
+              const sourceReferenceForValidation = processedUserImage || user_images?.[0] || null;
+              const validation = sourceReferenceForValidation
+                ? await validateHeadSwapResultWithReference(
+                    validationInput,
+                    sourceReferenceForValidation,
+                    genderSceneConfig.label || `Scene ${task.params.faceswap_scene}`,
+                    genderSceneConfig.validationTarget || target_person,
+                    genderSceneConfig.validationRule || ''
+                  )
+                : await validateHeadSwapResult(
+                    validationInput,
+                    genderSceneConfig.label || `Scene ${task.params.faceswap_scene}`,
+                    genderSceneConfig.validationTarget || target_person,
+                    genderSceneConfig.validationRule || ''
+                  );
               attemptDiagnostics.validation = validation;
               if (validation.ok && !validation.skipped) {
                 console.log(`[Worker] [faceswap] 验证通过: ${validation.reason}`);
